@@ -1028,7 +1028,7 @@ function setView(v){
   if(v==='source'){
     sourceEdit.value = toChordPro(song);
     autosizeSource();
-    sourceEdit.focus();
+    sourceEdit.focus({ preventScroll: true });
   } else {
     render();
   }
@@ -1057,18 +1057,358 @@ sourceEdit.addEventListener('input', () => {
 });
 
 /* ============================================================
+   PDF IMPORT  —  read back a sheet that ChordScribe printed
+   ------------------------------------------------------------
+   The renderer prints every line as a row of "cells", each cell a
+   chord stacked directly above its slice of lyric, all left-aligned.
+   We pull the positioned text out of the PDF with pdf.js, regroup it
+   into visual rows, pair each chord row with the lyric row just below
+   it, and rebuild the model from the geometry. Because chords sit at
+   the same x as the lyric slice they belong to, a chord's character
+   offset is just the length of the lyric to its left.
+
+   This is a best-effort reverse of the renderer, not a general PDF
+   reader: it assumes the chords-over-words layout this app produces.
+   ============================================================ */
+const PDFJS_VER = '3.11.174';
+/* A bare chord token: root, optional accidental, quality, extension, slash bass. */
+const PDF_CHORD_RE = /^[A-G](#|b|♯|♭)?(maj|min|m|sus|aug|dim|add|M|°|ø|\+)?\d*(sus\d*|add\d*)?\d*(\/[A-G](#|b|♯|♭)?)?$/;
+/* Non-chord marks that still live on a chord row: x2, [STOP], N.C., etc. */
+const PDF_MARK_RE  = /^(x\s?\d+|\[?\s*stop\s*\]?|\(\s*x?\d+\s*\)|n\.?\s?c\.?)$/i;
+
+function pdfIsChordTok(s){
+  s = (s||'').trim();
+  return s !== '' && (PDF_CHORD_RE.test(s) || PDF_MARK_RE.test(s));
+}
+
+/* Group text items into visual rows by their baseline y (top-of-page first). */
+function pdfClusterRows(items, tol){
+  const rows = [];
+  for(const it of items.slice().sort((a,b)=>b.y-a.y)){
+    let row = null;
+    for(const r of rows){ if(Math.abs(r.y - it.y) <= tol){ row = r; break; } }
+    if(!row){ row = { y: it.y, items: [] }; rows.push(row); }
+    row.items.push(it);
+  }
+  for(const r of rows) r.items.sort((a,b)=>a.x-b.x);
+  rows.sort((a,b)=>b.y-a.y);
+  return rows;
+}
+
+/* Rebuild a row's text from individual character positions.
+   Chrome faux-bolds headings (title, key line, section labels) by drawing each
+   glyph twice with a tiny offset, which pdf.js surfaces as overlapping bigram
+   fragments ("An","nd","dC"...). Working at the character level lets us drop the
+   duplicates and re-insert the spaces (visual gaps) that the fragments lost,
+   while staying a no-op on clean single-run text like the lyrics. Returns the
+   reconstructed string plus the x of each character, used to place chords. */
+function pdfReconstructRow(items){
+  const chars = [];
+  for(const it of items){
+    const s = it.str;
+    if(s === '' || s.trim() === '') continue;   // spaces come back via gaps below
+    const cw = it.w / Math.max(1, s.length);
+    for(let k=0;k<s.length;k++){
+      if(s[k] === ' ') continue;
+      chars.push({ ch: s[k], x: it.x + k*cw, cw });
+    }
+  }
+  chars.sort((a,b)=>a.x-b.x);
+  let text = '';
+  const charX = [];
+  let lastRight = null;
+  for(const c of chars){
+    if(lastRight !== null){
+      const gap = c.x - lastRight;
+      if(gap < -c.cw*0.34) continue;                      // overlapping duplicate glyph
+      if(gap > c.cw*0.15){
+        // Visual whitespace -> spaces. Measured on real sheets the gap cleanly
+        // splits: mid-word joins sit at <=0 (letters touch / kern), real word
+        // boundaries start near +0.2cw, with nothing between. 0.15cw lands in
+        // that empty band. Within a run the x-step is one cw (uniform), so real
+        // letters never trip this — only true gaps between cells do.
+        const n = Math.max(1, Math.round(gap / c.cw));
+        for(let j=0;j<n;j++){ charX.push(lastRight + j*c.cw); text += ' '; }
+      }
+    }
+    charX.push(c.x); text += c.ch; lastRight = c.x + c.cw;
+  }
+  return { text, charX };
+}
+
+function pdfRowText(row){ return pdfReconstructRow(row.items).text.replace(/\s+/g,' ').trim(); }
+
+/* True if any part of this row is body content (a section heading or chords).
+   Splits the row at wide horizontal gaps first so a section in one column
+   isn't masked by a section in another sharing the same baseline (the left
+   "INTRO" and right "VERSE 3" land on one line). Used to end the page header. */
+function pdfRowHasBody(row){
+  const sorted = row.items.slice().sort((a,b)=>a.x-b.x);
+  const groups = []; let cur = []; let prevRight = null;
+  for(const it of sorted){
+    if(prevRight !== null && it.x - prevRight > 40){ groups.push(cur); cur = []; }
+    cur.push(it); prevRight = it.x + it.w;
+  }
+  if(cur.length) groups.push(cur);
+  return groups.some(g => { const r = { items:g }; return SECTION_RE.test(pdfRowText(r)) || pdfRowIsChords(r); });
+}
+
+/* Chords on a chord row, each with the x where it begins, recovered from the
+   reconstructed text so multi-char chords (D/F#) and gaps survive. */
+function pdfChordTokens(items){
+  const { text, charX } = pdfReconstructRow(items);
+  const toks = [];
+  const re = /\S+/g; let m;
+  while((m = re.exec(text)) !== null){
+    toks.push({ chord: m[0], x: charX[m.index] });
+  }
+  return toks;
+}
+
+/* Does this row read like a stack of chords (vs lyrics)? */
+function pdfRowIsChords(row){
+  const toks = pdfRowText(row).split(/\s+/).filter(Boolean);
+  if(!toks.length) return false;
+  const hits = toks.filter(pdfIsChordTok).length;
+  return hits >= 1 && hits / toks.length >= 0.6;
+}
+
+/* Typical width of a single space, from the items' average character width. */
+function pdfSpaceWidth(items){
+  const ws = items.filter(it=>it.str.trim()).map(it=>it.w/Math.max(1,it.str.length)).filter(w=>w>0);
+  if(!ws.length) return 6;
+  ws.sort((a,b)=>a-b);
+  return ws[Math.floor(ws.length/2)];
+}
+
+/* Build a {type:'lyric'} line from a chord row's items and the lyric row's items
+   just below it. Reconstructs the lyric text and pins each chord to the
+   character offset that sits under its x position. Either row may be empty:
+   no chords -> a plain lyric line; no lyrics -> a chord-only instrumental line. */
+function pdfBuildLyricLine(chordItems, lyricItems, spaceW){
+  const chords = pdfChordTokens(chordItems || []);
+  let { text, charX } = pdfReconstructRow(lyricItems || []);
+  spaceW = spaceW || pdfSpaceWidth((lyricItems&&lyricItems.length)?lyricItems:(chordItems||[])) || 6;
+
+  const originX = charX.length ? charX[0]
+                : chords.length ? chords[0].x : 0;
+
+  // Pad trailing spaces so chords sitting past the last word still land somewhere
+  // (chord-only lines build their whole "lyric" of spaces this way).
+  const lastChordX = chords.length ? chords[chords.length-1].x : originX;
+  let cursorX = charX.length ? charX[charX.length-1] + spaceW : originX;
+  while(cursorX < lastChordX - spaceW*0.3){ charX.push(cursorX); text += ' '; cursorX += spaceW; }
+
+  const placed = [];
+  for(const c of chords){
+    let off = 0;
+    for(let i=0;i<charX.length;i++){ if(charX[i] < c.x - spaceW*0.4) off = i+1; else break; }
+    if(off > text.length) off = text.length;
+    placed.push({ off, chord: c.chord });
+  }
+  placed.sort((a,b)=>a.off-b.off);
+  return { type:'lyric', text, chords: placed };
+}
+
+/* Find x positions of column gutters: vertical rivers of whitespace that run
+   the full height of the body. Returns [] for a single-column page. */
+function pdfColumnSeps(items, pageW){
+  if(!items.length) return [];
+  const W = Math.ceil(pageW) + 2;
+  const filled = new Array(W).fill(false);
+  for(const it of items){
+    const a = Math.max(0, Math.floor(it.x));
+    const b = Math.min(W-1, Math.ceil(it.x + it.w));
+    for(let i=a;i<=b;i++) filled[i] = true;
+  }
+  const minX = Math.min(...items.map(i=>i.x));
+  const maxX = Math.max(...items.map(i=>i.x + i.w));
+  const seps = [];
+  let run = 0;
+  for(let i=0;i<=W;i++){
+    if(i < W && !filled[i]){ run++; continue; }
+    if(run >= 14){
+      const start = i - run, mid = start + run/2;
+      if(start > minX + 8 && i < maxX - 8) seps.push(mid);
+    }
+    run = 0;
+  }
+  return seps.sort((a,b)=>a-b);
+}
+
+function pdfColumnOf(x, seps){
+  let c = 0;
+  for(const s of seps){ if(x > s) c++; }
+  return c;
+}
+
+/* Turn an ordered list of rows (one newspaper column) into model lines. */
+function pdfRowsToLines(rows, spaceW, lines){
+  for(let i=0;i<rows.length;i++){
+    const row = rows[i];
+    const txt = pdfRowText(row);
+    if(!txt) continue;
+
+    if(SECTION_RE.test(txt) && !pdfRowIsChords(row)){
+      if(lines.length && !isBlank(lines[lines.length-1])) lines.push({type:'lyric', text:'', chords:[]});
+      // Title-case "VERSE 1" -> "Verse 1" so it reads naturally back in the editor.
+      const label = txt.replace(/\b([A-Za-z])([A-Za-z]*)/g, (m,a,b)=>a.toUpperCase()+b.toLowerCase());
+      lines.push({ type:'section', label });
+      continue;
+    }
+
+    if(pdfRowIsChords(row)){
+      const next = rows[i+1];
+      const gap = next ? row.y - next.y : Infinity;
+      const pairable = next && !pdfRowIsChords(next) && !SECTION_RE.test(pdfRowText(next)) &&
+                       gap > 0 && gap < spaceW*3.2;
+      if(pairable){
+        lines.push(pdfBuildLyricLine(row.items, next.items, spaceW));
+        i++;                       // consume the lyric row too
+      } else {
+        lines.push(pdfBuildLyricLine(row.items, [], spaceW));   // chord-only (intro/instrumental)
+      }
+      continue;
+    }
+
+    // Plain lyric row with no chords above it.
+    lines.push(pdfBuildLyricLine([], row.items, spaceW));
+  }
+}
+
+function pdfParseKeyline(s, meta){
+  for(const part of s.split('|')){
+    let m;
+    if((m = part.match(/key\s*[-–:]\s*(.+)/i)))        meta.key   = m[1].trim();
+    else if((m = part.match(/tempo\s*[-–:]\s*(.+)/i))) meta.tempo = m[1].trim();
+    else if((m = part.match(/time\s*[-–:]\s*(.+)/i)))  meta.time  = m[1].trim();
+  }
+}
+
+async function importPdf(arrayBuffer){
+  if(!window.pdfjsLib) throw new Error('PDF support failed to load');
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/'+PDFJS_VER+'/pdf.worker.min.js';
+  }
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+  const meta = {};
+  const lines = [];
+
+  for(let p=1; p<=pdf.numPages; p++){
+    const page = await pdf.getPage(p);
+    const vp = page.getViewport({ scale:1 });
+    const tc = await page.getTextContent();
+    const items = tc.items
+      .filter(it => it.str && it.str.trim() !== '')
+      .map(it => ({
+        str: it.str,
+        x: it.transform[4],
+        y: it.transform[5],
+        w: it.width,
+        h: it.height || Math.abs(it.transform[3]) || 10
+      }));
+    if(!items.length) continue;
+
+    const heights = items.map(i=>i.h).sort((a,b)=>a-b);
+    const medH = heights[Math.floor(heights.length/2)] || 12;
+    const spaceW = pdfSpaceWidth(items);
+
+    // ---- header (page 1 only): everything above the first section / chord row ----
+    let bodyItems = items;
+    if(p === 1){
+      const fullRows = pdfClusterRows(items, medH*0.5);
+      const headerRows = [];
+      let split = 0;
+      for(; split<fullRows.length; split++){
+        const r = fullRows[split];
+        if(pdfRowHasBody(r)) break;
+        headerRows.push(r);
+      }
+      if(headerRows.length){
+        // Title = the tallest text on the page; key/tempo/time = the "Key - ..." row.
+        let titleItem = null;
+        for(const r of headerRows) for(const it of r.items){
+          if(!titleItem || it.h > titleItem.h) titleItem = it;
+        }
+        const titleH = titleItem ? titleItem.h : 0;
+        const artistBits = [];
+        for(const r of headerRows){
+          const t = pdfRowText(r);
+          if(!t) continue;
+          if(/key\s*[-–:]/i.test(t) || /\b(tempo|time)\s*[-–:]/i.test(t)){ pdfParseKeyline(t, meta); continue; }
+          if(titleItem && r.items.some(it => it.h >= titleH - 0.5)){ if(!meta.title) meta.title = t; continue; }
+          artistBits.push(t);
+        }
+        if(artistBits.length && !meta.artist) meta.artist = artistBits[0];
+        const headerSet = new Set(headerRows.flatMap(r=>r.items));
+        bodyItems = items.filter(it => !headerSet.has(it));
+      }
+    }
+    if(!bodyItems.length) continue;
+
+    // ---- body: split into columns, read each column top-to-bottom, left-to-right ----
+    const seps = pdfColumnSeps(bodyItems, vp.width);
+    const cols = [];
+    for(const it of bodyItems){
+      const ci = pdfColumnOf(it.x + it.w/2, seps);
+      (cols[ci] = cols[ci] || []).push(it);
+    }
+    for(const colItems of cols){
+      if(!colItems || !colItems.length) continue;
+      const rows = pdfClusterRows(colItems, medH*0.5);
+      pdfRowsToLines(rows, spaceW, lines);
+    }
+  }
+
+  // Faux-bold headings sometimes lose word spaces (title) or double a short
+  // value (key). Recover Title Case word breaks and collapse an exact doubling.
+  if(meta.title){
+    meta.title = meta.title.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/\s+/g,' ').trim();
+  }
+  for(const k of ['key','time']){
+    const v = meta[k]; if(!v) continue;
+    const m = v.match(/^(.+)\1$/);
+    if(m && m[1].length <= 3) meta[k] = m[1];
+  }
+
+  while(lines.length && isBlank(lines[lines.length-1])) lines.pop();
+  if(!lines.length) throw new Error('No chord/lyric content found in that PDF');
+  return { meta, lines };
+}
+
+/* ============================================================
    IMPORT
    ============================================================ */
 document.getElementById('fileinput').addEventListener('change', e => {
   const f = e.target.files[0]; if(!f) return;
+  const isPdf = /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
   const reader = new FileReader();
-  reader.onload = ev => {
-    pushHistory();
-    song = parseChordPro(ev.target.result);
-    render();
-    toast('Imported '+f.name);
-  };
-  reader.readAsText(f);
+
+  if(isPdf){
+    reader.onload = async ev => {
+      try {
+        const parsed = await importPdf(ev.target.result);
+        pushHistory();
+        song = parsed;
+        render();
+        toast('Imported '+f.name);
+      } catch(err){
+        console.error(err);
+        toast(err && err.message ? 'PDF: '+err.message : 'Could not read that PDF');
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  } else {
+    reader.onload = ev => {
+      pushHistory();
+      song = parseChordPro(ev.target.result);
+      render();
+      toast('Imported '+f.name);
+    };
+    reader.readAsText(f);
+  }
+  e.target.value = '';   // allow re-importing the same file
 });
 
 /* ============================================================
@@ -1154,7 +1494,7 @@ function buildRenderedLineEl(ln){
   for(const seg of segmentsOf(ln)){
     const c = (seg.chord!==null && seg.chord!==undefined) ? seg.chord : null;
     if(c !== null){
-      if(started) cells.push({ chord: curChord, text: curText });
+      if(started || curText.length) cells.push({ chord: curChord, text: curText });
       curChord = c; curText = ''; started = true;
     }
     curText += seg.text;
@@ -1368,6 +1708,11 @@ function renderedToText(){
 function fnameBase(){
   return (song.meta.title||'song').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'') || 'song';
 }
+// Browsers use document.title as the default "Save as PDF" filename, so build a
+// clean hyphenated name from the song title (e.g. "And-Can-It-Be").
+function pdfBase(){
+  return (song.meta.title||'song').replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'') || 'song';
+}
 function download(filename, text){
   try {
     const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
@@ -1476,18 +1821,18 @@ function buildPrintDocHTML(){
     ".psheet{ width:8.5in; height:11in; padding:0.6in; overflow:hidden; position:relative; --exp-lyric:" + lyricSize + "px; --exp-chord:" + chordSize + "px; }",
     ".psheet.brk{ page-break-after:always; }",
     "h2{ font-family:" + lyricFont + "; font-weight:900; font-size:26px; margin:0 0 2px; }",
-    ".credit{ font-size:12px; color:#555; }",
-    ".keyline{ font-size:12px; font-weight:600; margin-bottom:0; }",
+    ".credit{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:#555; }",
+    ".keyline{ font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; margin-bottom:0; }",
     ".roadline{ display:flex; flex-wrap:wrap; gap:5px; justify-content:flex-end; }",
-    ".roadline .rchip{ font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#000; border:1px solid #000; border-radius:2px; padding:1px 5px; }",
-    ".noteline{ font-size:11px; font-style:italic; color:#444; white-space:pre-wrap; align-self:stretch; text-align:left; }",
+    ".roadline .rchip{ font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#000; border:1px solid #000; border-radius:2px; padding:1px 5px; }",
+    ".noteline{ font-family:'IBM Plex Mono',monospace; font-size:11px; font-style:italic; color:#444; white-space:pre-wrap; align-self:stretch; text-align:left; }",
     ".rhead{ margin-bottom:16px; display:flex; justify-content:space-between; align-items:flex-start; gap:0.4in; }",
     ".rhead-left{ min-width:0; }",
     ".rhead-right{ display:flex; flex-direction:column; align-items:flex-end; gap:6px; max-width:3in; flex-shrink:0; text-align:right; }",
     ".rbody{ display:flex; gap:0.3in; align-items:flex-start; }",
     ".rcol{ flex:1; min-width:0; }",
     ".rblock{ margin-bottom:14px; padding-right:0.12in; overflow:hidden; }",
-    ".rsection{ font-weight:700; font-size:12px; letter-spacing:.1em; text-transform:uppercase; margin:0 0 6px; }",
+    ".rsection{ font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:12px; letter-spacing:.1em; text-transform:uppercase; margin:0 0 6px; }",
     ".rline{ margin-bottom:8px; }",
     ".rcells{ display:flex; flex-wrap:wrap; align-items:flex-end; }",
     ".rcell{ display:inline-flex; flex-direction:column; align-items:flex-start; }",
@@ -1553,18 +1898,18 @@ function printRendered(){
       'font-family:' + lyricFont + ';--exp-lyric:' + lyricSize + 'px;--exp-chord:' + chordSize + 'px;}' +
     '.psheet.brk{page-break-after:always;}' +
     '#print-host h2{font-family:' + lyricFont + ';font-weight:900;font-size:26px;margin:0 0 2px;}' +
-    '#print-host .credit{font-size:12px;color:#555;}' +
-    '#print-host .keyline{font-size:12px;font-weight:600;margin-bottom:0;}' +
+    '#print-host .credit{font-family:\'IBM Plex Mono\',monospace;font-size:12px;color:#555;}' +
+    '#print-host .keyline{font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:600;margin-bottom:0;}' +
     '#print-host .roadline{display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end;}' +
-    '#print-host .roadline .rchip{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#000;border:1px solid #000;border-radius:2px;padding:1px 5px;}' +
-    '#print-host .noteline{font-size:11px;font-style:italic;color:#444;white-space:pre-wrap;align-self:stretch;text-align:left;}' +
+    '#print-host .roadline .rchip{font-family:\'IBM Plex Mono\',monospace;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#000;border:1px solid #000;border-radius:2px;padding:1px 5px;}' +
+    '#print-host .noteline{font-family:\'IBM Plex Mono\',monospace;font-size:11px;font-style:italic;color:#444;white-space:pre-wrap;align-self:stretch;text-align:left;}' +
     '#print-host .rhead{margin-bottom:16px;display:flex;justify-content:space-between;align-items:flex-start;gap:0.4in;}' +
     '#print-host .rhead-left{min-width:0;}' +
     '#print-host .rhead-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:3in;flex-shrink:0;text-align:right;}' +
     '#print-host .rbody{display:flex;gap:0.3in;align-items:flex-start;}' +
     '#print-host .rcol{flex:1;min-width:0;}' +
     '#print-host .rblock{margin-bottom:14px;padding-right:0.12in;overflow:hidden;}' +
-    '#print-host .rsection{font-weight:700;font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin:0 0 6px;}' +
+    '#print-host .rsection{font-family:\'IBM Plex Mono\',monospace;font-weight:700;font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin:0 0 6px;}' +
     '#print-host .rline{margin-bottom:8px;}' +
     '#print-host .rcells{display:flex;flex-wrap:wrap;align-items:flex-end;}' +
     '#print-host .rcell{display:inline-flex;flex-direction:column;align-items:flex-start;}' +
@@ -1574,8 +1919,12 @@ function printRendered(){
   document.head.appendChild(pstyle);
   document.body.appendChild(host);
 
+  const prevTitle = document.title;
+  document.title = pdfBase();
+
   const cleanup = () => {
     host.remove(); pstyle.remove();
+    document.title = prevTitle;
     window.removeEventListener('afterprint', cleanup);
   };
   window.addEventListener('afterprint', cleanup);

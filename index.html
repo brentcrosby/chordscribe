@@ -18,8 +18,8 @@
       <span class="sub">ChordPro&nbsp;Editor</span>
     </div>
     <div class="toolbar">
-      <label class="filelabel" for="fileinput">Import .txt / .pro</label>
-      <input id="fileinput" type="file" accept=".txt,.pro,.chordpro,.crd" style="display:none">
+      <label class="filelabel" for="fileinput">Import .txt / .pro / .pdf</label>
+      <input id="fileinput" type="file" accept=".txt,.pro,.chordpro,.crd,.pdf,application/pdf" style="display:none">
       <div class="modeswitch">
         <button id="viewEditor" class="active" onclick="setView('editor')">Editor</button>
         <button id="viewSource" onclick="setView('source')">ChordPro</button>
@@ -130,7 +130,7 @@
       </ul>
       <h4>Saving &amp; sharing</h4>
       <ul>
-        <li>Use <b>Export</b> to print, save a PDF, or download the ChordPro source. <b>Import</b> loads <b>.txt</b>, <b>.pro</b>, <b>.chordpro</b> or <b>.crd</b> files.</li>
+        <li>Use <b>Export</b> to print, save a PDF, or download the ChordPro source. <b>Import</b> loads <b>.txt</b>, <b>.pro</b>, <b>.chordpro</b> or <b>.crd</b> files — and can read back a <b>.pdf</b> that ChordScribe printed (chords sit above the words, so the layout is recovered from the page).</li>
       </ul>
     </div>
   </div>
@@ -190,6 +190,7 @@
 
 <div class="toast" id="toast"></div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
