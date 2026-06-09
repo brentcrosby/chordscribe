@@ -820,6 +820,11 @@ function openChordPop(anchorEl, lineEl, off, pad){
   inp.onkeydown = e => {
     if(e.key==='Enter'){ apply(inp.value.trim()); }
     if(e.key==='Escape'){ closePop(); }
+    // Del removes the chord outright and closes the editor.
+    if(e.key==='Delete' && existing){
+      e.preventDefault();
+      apply('');
+    }
   };
 }
 
@@ -1078,6 +1083,11 @@ function openExport(){
 }
 function closeExport(){ document.getElementById('modalBg').classList.remove('show'); }
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeExport(); });
+
+function openHelp(){ document.getElementById('helpBg').classList.add('show'); }
+function closeHelp(){ document.getElementById('helpBg').classList.remove('show'); }
+document.getElementById('helpBg').addEventListener('click', e=>{ if(e.target.id==='helpBg') closeHelp(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeHelp(); });
 
 function exportTab(which){
   document.getElementById('tabRendered').classList.toggle('active', which==='rendered');

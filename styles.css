@@ -416,6 +416,18 @@
   .modal .mhead h3 { font-family: 'Fraunces', serif; margin: 0; font-size: 20px; }
   .modal .mbody { padding: 22px 26px 30px; }
 
+  /* Help dialog */
+  .help-body { font-family: 'Newsreader', Georgia, serif; font-size: 16px; line-height: 1.5; }
+  .help-body h4 {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent);
+    margin: 20px 0 6px;
+  }
+  .help-body h4:first-child { margin-top: 0; }
+  .help-body ul { margin: 0; padding-left: 20px; }
+  .help-body li { margin: 4px 0; }
+  .help-body b { font-weight: 600; }
+
   /* Rendered export: real 8.5x11 letter pages (scaled for preview) */
   .page-scroll {
     background: #e9e9e9; border: 1px solid var(--parchment-edge); border-radius: 3px;

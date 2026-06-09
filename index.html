@@ -20,12 +20,11 @@
     <div class="toolbar">
       <label class="filelabel" for="fileinput">Import .txt / .pro</label>
       <input id="fileinput" type="file" accept=".txt,.pro,.chordpro,.crd" style="display:none">
-      <button id="undoBtn" onclick="undo()" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
-      <button id="redoBtn" onclick="redo()" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
       <div class="modeswitch">
         <button id="viewEditor" class="active" onclick="setView('editor')">Editor</button>
         <button id="viewSource" onclick="setView('source')">ChordPro</button>
       </div>
+      <button onclick="openHelp()" title="Help">? Help</button>
       <button onclick="openExport()" class="primary">Export</button>
     </div>
   </header>
@@ -98,6 +97,43 @@
             placeholder="{title: ...}&#10;&#10;{comment: Verse 1}&#10;[D]And can it be that [G]I should [A7]gain"></textarea>
 
   <footer class="foot">Unified editor · chords sit above the words · switch to ChordPro to edit the raw source</footer>
+</div>
+
+<!-- Help modal -->
+<div class="modal-bg" id="helpBg">
+  <div class="modal">
+    <div class="mhead">
+      <h3>How to use ChordScribe</h3>
+      <button onclick="closeHelp()">Close</button>
+    </div>
+    <div class="mbody help-body">
+      <h4>Editor view</h4>
+      <ul>
+        <li>Type lyrics like a normal text editor — <b>Enter</b> starts a new line, and you can select, cut, copy &amp; paste across lines.</li>
+        <li>Hover a word and click the <b>+</b> above it to add a chord. Click an existing chord to change it, or drag it to move it.</li>
+        <li>Type a name like <b>Chorus</b> or <b>Verse 2</b> on its own line to turn it into a section heading.</li>
+      </ul>
+      <h4>ChordPro view</h4>
+      <ul>
+        <li>Edit the raw source directly. Put chords inline in brackets like <b>[D]</b> before the word they land on.</li>
+        <li>Mark sections with <b>{comment: Verse 1}</b>. Changes sync back to the Editor view.</li>
+      </ul>
+      <h4>Song details</h4>
+      <ul>
+        <li>Fill in the title, artist, key and other fields at the top. Add a <b>Road map</b> (e.g. <i>Intro V1 CH V2</i>) and <b>Notes</b> for quick reminders.</li>
+      </ul>
+      <h4>Keyboard shortcuts</h4>
+      <ul>
+        <li><b>Ctrl/Cmd + Z</b> — Undo</li>
+        <li><b>Ctrl/Cmd + Shift + Z</b> (or <b>Ctrl/Cmd + Y</b>) — Redo</li>
+        <li><b>Esc</b> — close a chord editor or this dialog</li>
+      </ul>
+      <h4>Saving &amp; sharing</h4>
+      <ul>
+        <li>Use <b>Export</b> to print, save a PDF, or download the ChordPro source. <b>Import</b> loads <b>.txt</b>, <b>.pro</b>, <b>.chordpro</b> or <b>.crd</b> files.</li>
+      </ul>
+    </div>
+  </div>
 </div>
 
 <!-- Export modal -->
