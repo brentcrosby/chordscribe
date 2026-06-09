@@ -917,6 +917,9 @@ function updateGhost(lineEl, cx){
   ensureGhost();
   ghostEl.style.left = t.x + 'px';
   ghostEl.style.top = lineEl.offsetTop + 'px';
+  // On blank/instrumental lines the chord is free-placed, so center the ghost
+  // on the cursor's snap point instead of letting it extend to the right.
+  ghostEl.style.transform = t.pad ? 'translate(-50%, 1px)' : '';
   ghostEl.classList.add('show');
 }
 function hideGhost(){ if(ghostEl) ghostEl.classList.remove('show'); }
