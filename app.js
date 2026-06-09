@@ -38,11 +38,33 @@ let typingTimer = null;
 function snapshot(){ return JSON.stringify(song); }
 function restore(s){ song = JSON.parse(s); }
 
+/* ---------- local autosave (survives reloads) ---------- */
+const SAVE_KEY = 'chordscribe:song';
+let saveTimer = null;
+function saveLocal(){
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {       // debounced so typing doesn't hammer storage
+    saveTimer = null;
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(song)); }
+    catch(e){ /* quota exceeded / private mode — fail silently */ }
+  }, 400);
+}
+function loadLocal(){
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    if(s && Array.isArray(s.lines) && s.meta) return s;   // sanity-check shape
+  } catch(e){}
+  return null;
+}
+
 function pushHistory(){
   if(typingTimer){ clearTimeout(typingTimer); typingTimer = null; }
   undoStack.push(snapshot());
   if(undoStack.length > HISTORY_LIMIT) undoStack.shift();
   redoStack = [];
+  saveLocal();
 }
 
 function pushHistoryTyping(){
@@ -54,6 +76,7 @@ function pushHistoryTyping(){
     clearTimeout(typingTimer);
   }
   typingTimer = setTimeout(() => { typingTimer = null; }, 700);
+  saveLocal();
 }
 
 function undo(){
@@ -62,12 +85,14 @@ function undo(){
   redoStack.push(snapshot());
   restore(undoStack.pop());
   render();
+  saveLocal();
 }
 function redo(){
   if(redoStack.length === 0) return;
   undoStack.push(snapshot());
   restore(redoStack.pop());
   render();
+  saveLocal();
 }
 
 document.addEventListener('keydown', e => {
@@ -2027,6 +2052,6 @@ For [G]me who [D/F#]Him     [G]   to [D/A]death [A7]pur - [D]sued
 [D]A  -  [A]mazing [D/F#]love! How [G]can  [E7/G#]it     [A]be
 That [D]Thou     my [G]God      shouldst [A]die     for [D]me`;
 
-song = parseChordPro(SAMPLE);
+song = loadLocal() || parseChordPro(SAMPLE);
 render();
 if(document.fonts && document.fonts.ready){ document.fonts.ready.then(positionChords); }
