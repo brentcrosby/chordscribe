@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChordScribe — ChordPro Editor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>ChordScribe</h1>
+      <span class="sub">ChordPro&nbsp;Editor</span>
+    </div>
+    <div class="toolbar">
+      <label class="filelabel" for="fileinput">Import .txt / .pro</label>
+      <input id="fileinput" type="file" accept=".txt,.pro,.chordpro,.crd" style="display:none">
+      <button id="undoBtn" onclick="undo()" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
+      <button id="redoBtn" onclick="redo()" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
+      <div class="modeswitch">
+        <button id="modeChord" class="active" onclick="setMode('chord')">Chord Mode</button>
+        <button id="modeLyric" onclick="setMode('lyric')">Lyric Mode</button>
+      </div>
+      <button onclick="openExport()" class="primary">Export</button>
+    </div>
+  </header>
+
+  <div class="fontbar">
+    <span class="fb-group">
+      <label>Lyric font</label>
+      <select id="fontFamily" onchange="applyFont()">
+        <option value="'Newsreader', Georgia, serif">Newsreader (serif)</option>
+        <option value="'Fraunces', serif">Fraunces (display serif)</option>
+        <option value="Georgia, 'Times New Roman', serif">Georgia</option>
+        <option value="'IBM Plex Mono', monospace">IBM Plex Mono</option>
+        <option value="system-ui, -apple-system, sans-serif">System Sans</option>
+      </select>
+    </span>
+    <span class="fb-group">
+      <label>Lyric size</label>
+      <input id="fontSize" type="range" min="14" max="32" value="20" oninput="applyFont()">
+      <span id="fontSizeVal" class="fb-val">20px</span>
+    </span>
+    <span class="fb-group">
+      <label>Chord font</label>
+      <select id="chordFamily" onchange="applyFont()">
+        <option value="ui-monospace, 'Courier New', monospace">Courier</option>
+        <option value="'IBM Plex Mono', monospace">IBM Plex Mono</option>
+        <option value="'Fraunces', serif">Fraunces (serif)</option>
+        <option value="Georgia, serif">Georgia</option>
+        <option value="system-ui, -apple-system, sans-serif">System Sans</option>
+        <option value="Arial, Helvetica, sans-serif">Arial</option>
+      </select>
+    </span>
+    <span class="fb-group">
+      <label>Chord size</label>
+      <input id="chordSize" type="range" min="10" max="22" value="13" oninput="applyFont()">
+      <span id="chordSizeVal" class="fb-val">13px</span>
+    </span>
+  </div>
+
+  <div class="meta-bar" id="metaBar"></div>
+
+  <div class="hint" id="hint"></div>
+
+  <div class="clipbar" id="clipbar">
+    <span class="label" id="clipLabel">Clipboard</span>
+    <span class="what" id="clipWhat"></span>
+    <span class="hinttext" id="clipHint" style="opacity:.7">Use a "Paste below" button to place it, or</span>
+    <button id="clipCopySel" onclick="copySelection()" style="display:none">Copy selected</button>
+    <button id="clipCancelSel" onclick="cancelSelection()" style="display:none">Cancel</button>
+    <button id="clipPasteTop" onclick="pasteAtStart()">Paste at top</button>
+    <button class="clear" id="clipClear" onclick="clearClip()">Clear</button>
+  </div>
+
+  <div class="sheet" id="sheet"></div>
+
+  <div class="addrow" id="addRow" style="display:none">
+    <button onclick="addLyricLine()">+ Add line</button>
+    <button onclick="addSection()">+ Add section</button>
+  </div>
+
+  <footer class="foot">Click a word to attach or edit a chord · Chords export stacked above the lyric</footer>
+</div>
+
+<!-- Export modal -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <div class="mhead">
+      <h3>Export</h3>
+      <button onclick="closeExport()">Close</button>
+    </div>
+    <div class="mbody">
+      <div class="tabrow">
+        <button id="tabRendered" class="active" onclick="exportTab('rendered')">Rendered Sheet</button>
+        <button id="tabSource" onclick="exportTab('source')">ChordPro Source</button>
+      </div>
+      <div id="exportRendered">
+        <div class="colctl">
+          <span class="ec-group">
+            <label>Columns</label>
+            <div class="colswitch">
+              <button class="active" data-col="1" onclick="setCols(1)">1</button>
+              <button data-col="2" onclick="setCols(2)">2</button>
+              <button data-col="3" onclick="setCols(3)">3</button>
+            </div>
+          </span>
+          <span class="ec-group">
+            <label>Lyric size</label>
+            <input id="expLyricSize" type="range" min="9" max="20" value="13" oninput="buildRendered()">
+            <span id="expLyricVal" class="fb-val">13px</span>
+          </span>
+          <span class="ec-group">
+            <label>Chord size</label>
+            <input id="expChordSize" type="range" min="8" max="18" value="12" oninput="buildRendered()">
+            <span id="expChordVal" class="fb-val">12px</span>
+          </span>
+        </div>
+        <div class="page-scroll">
+          <div class="pages" id="renderArea"></div>
+        </div>
+        <div class="addrow" style="margin-top:20px">
+          <button class="primary" onclick="printRendered()">Print / Save PDF (Letter)</button>
+          <button onclick="downloadRenderedTxt()">Download .txt</button>
+        </div>
+      </div>
+      <div id="exportSource" style="display:none">
+        <pre class="rawout" id="sourceArea"></pre>
+        <div class="addrow" style="margin-top:16px">
+          <button class="primary" onclick="downloadSource()">Download .pro</button>
+          <button onclick="copySource()">Copy to clipboard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
