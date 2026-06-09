@@ -23,8 +23,8 @@
       <button id="undoBtn" onclick="undo()" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
       <button id="redoBtn" onclick="redo()" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
       <div class="modeswitch">
-        <button id="modeChord" class="active" onclick="setMode('chord')">Chord Mode</button>
-        <button id="modeLyric" onclick="setMode('lyric')">Lyric Mode</button>
+        <button id="viewEditor" class="active" onclick="setView('editor')">Editor</button>
+        <button id="viewSource" onclick="setView('source')">ChordPro</button>
       </div>
       <button onclick="openExport()" class="primary">Export</button>
     </div>
@@ -64,28 +64,40 @@
     </span>
   </div>
 
-  <div class="meta-bar" id="metaBar"></div>
+  <div class="header-fields">
+    <div class="meta-bar" id="metaBar"></div>
 
-  <div class="hint" id="hint"></div>
-
-  <div class="clipbar" id="clipbar">
-    <span class="label" id="clipLabel">Clipboard</span>
-    <span class="what" id="clipWhat"></span>
-    <span class="hinttext" id="clipHint" style="opacity:.7">Use a "Paste below" button to place it, or</span>
-    <button id="clipCopySel" onclick="copySelection()" style="display:none">Copy selected</button>
-    <button id="clipCancelSel" onclick="cancelSelection()" style="display:none">Cancel</button>
-    <button id="clipPasteTop" onclick="pasteAtStart()">Paste at top</button>
-    <button class="clear" id="clipClear" onclick="clearClip()">Clear</button>
+    <div class="roadmap-bar">
+      <label for="roadmapInput">Road map</label>
+      <div class="rm-control">
+        <input id="roadmapInput" type="text" spellcheck="false"
+               placeholder="e.g. Intro  V1  V2  CH  V3  CH  Bridge  CH  Out">
+        <div class="rm-chips" id="roadmapChips"></div>
+      </div>
+      <label for="notesInput">Notes</label>
+      <textarea id="notesInput" rows="1" spellcheck="false"
+                placeholder="Little reminders — capo 2, watch the key change…"></textarea>
+    </div>
   </div>
 
-  <div class="sheet" id="sheet"></div>
-
-  <div class="addrow" id="addRow" style="display:none">
-    <button onclick="addLyricLine()">+ Add line</button>
-    <button onclick="addSection()">+ Add section</button>
+  <div class="hint" id="hintEditor">
+    <b>Editor</b> — type lyrics like a normal text editor: Enter starts a new line, and you can select, cut, copy &amp; paste across lines. Hover a word and click the <b>+</b> above it to add a chord (click a chord to change it). Type a name like <b>Chorus</b> or <b>Verse 2</b> on its own line to make a section.
+  </div>
+  <div class="hint" id="hintSource" style="display:none">
+    <b>ChordPro</b> — edit the raw source directly. Put chords inline in brackets like <b>[D]</b> before the word they land on, and mark sections with <b>{comment: Verse 1}</b>. Changes sync back to the Editor view.
   </div>
 
-  <footer class="foot">Click a word to attach or edit a chord · Chords export stacked above the lyric</footer>
+  <div class="sheet" id="sheet">
+    <div id="editorWrap">
+      <div id="editor" contenteditable="true" spellcheck="false"></div>
+      <div id="chordLayer"></div>
+    </div>
+  </div>
+
+  <textarea id="sourceEdit" class="source-edit" spellcheck="false" style="display:none"
+            placeholder="{title: ...}&#10;&#10;{comment: Verse 1}&#10;[D]And can it be that [G]I should [A7]gain"></textarea>
+
+  <footer class="foot">Unified editor · chords sit above the words · switch to ChordPro to edit the raw source</footer>
 </div>
 
 <!-- Export modal -->

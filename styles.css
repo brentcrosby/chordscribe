@@ -93,10 +93,16 @@
   .fontbar input[type=range] { accent-color: var(--accent); cursor: pointer; width: 110px; }
   .fontbar .fb-val { font-size: 11px; min-width: 34px; }
 
+  /* Title/key fields on the left, road map + notes on the right of one row */
+  .header-fields {
+    display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start;
+    justify-content: space-between; margin-bottom: 18px;
+  }
   .meta-bar {
-    display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+    display: flex; gap: 18px 18px; flex-wrap: wrap; align-content: flex-start;
+    align-items: flex-start;
     font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft);
-    margin-bottom: 18px;
+    flex: 1 1 360px;
   }
   .meta-bar .field { display: flex; align-items: center; gap: 6px; }
   .meta-bar label { text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; }
@@ -107,6 +113,34 @@
   }
   .meta-bar input:focus { outline: none; border-bottom-color: var(--accent); }
   .meta-bar input.title-inp { width: 240px; font-weight: 600; font-size: 15px; }
+
+  /* Road map + notes — compact label/control grid, right side of the row */
+  .roadmap-bar {
+    display: grid; grid-template-columns: auto 1fr; gap: 9px 10px; align-items: start;
+    flex: 1 1 340px; max-width: 480px;
+  }
+  .roadmap-bar label {
+    font-family: 'IBM Plex Mono', monospace; text-transform: uppercase;
+    letter-spacing: 0.12em; font-size: 10px; color: var(--ink-soft);
+    text-align: right; padding-top: 8px; white-space: nowrap;
+  }
+  .roadmap-bar .rm-control { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .roadmap-bar input, .roadmap-bar textarea {
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink);
+    background: #ffffff; border: 1.5px solid var(--line); border-radius: 2px;
+    padding: 7px 9px; width: 100%;
+  }
+  .roadmap-bar textarea { resize: none; overflow: hidden; min-height: 36px; line-height: 1.5; }
+  .roadmap-bar input:focus, .roadmap-bar textarea:focus { outline: none; border-color: var(--accent); }
+  .roadmap-bar input::placeholder, .roadmap-bar textarea::placeholder { color: var(--line); }
+  .rm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rm-chips:empty { display: none; }
+  .rm-chip {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--chord); background: var(--chord-bg);
+    border: 1px solid var(--chord); border-radius: 2px; padding: 3px 8px;
+  }
 
   /* The hint line */
   .hint {
@@ -121,8 +155,91 @@
     border: 1px solid var(--parchment-edge);
     border-radius: 3px;
     box-shadow: 0 18px 40px -22px var(--shadow), 0 3px 10px -6px var(--shadow);
-    padding: 38px 42px 48px;
+    padding: 30px 40px 44px;
   }
+
+  /* ---- Unified WYSIWYG editor ---- */
+  #editorWrap { position: relative; }
+  #editor {
+    outline: none;
+    white-space: pre;
+    font-family: var(--lyric-font);
+    font-size: var(--lyric-size);
+    line-height: 1.3;
+    color: var(--ink);
+    min-height: 320px;
+    overflow-x: auto;
+  }
+  #editor .line {
+    position: relative;
+    padding: 1.55em 2px 0.12em;
+    min-height: calc(1.55em + 1.3em);
+    border-radius: 3px;
+  }
+  #editor .line.blank { min-height: 1.55em; }
+  #editor .line:hover { background: rgba(201,185,148,0.10); }
+  /* Section heading lines */
+  #editor .line.sec {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px; font-weight: 600;
+    letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent);
+    padding-top: 1.1em; margin-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  #editor .line.sec:first-child { margin-top: 0; border-top: none; padding-top: 0.3em; }
+
+  /* chord overlay drawn above the words */
+  #chordLayer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+  .ed-chord {
+    position: absolute; pointer-events: auto; cursor: grab;
+    font-family: var(--chord-font); font-size: var(--chord-size); font-weight: 600;
+    line-height: 1.3; color: var(--chord); background: var(--chord-bg);
+    border-radius: 2px; padding: 0 3px; white-space: nowrap;
+    transform: translateY(1px);
+    user-select: none;
+  }
+  .ed-chord:hover { outline: 1px solid var(--chord); }
+  .ed-chord.dragging {
+    cursor: grabbing; z-index: 5; opacity: 0.92;
+    box-shadow: 0 4px 12px -3px rgba(0,0,0,0.4);
+    outline: 1px solid var(--chord);
+  }
+  .ed-chord.ghost { cursor: pointer; }
+  /* while dragging a chord, let the pointer pass through the other tags so a
+     drop can land on an occupied spot */
+  #editorWrap.dragging .ed-chord:not(.dragging) { pointer-events: none; }
+  .ed-chord.ghost {
+    color: var(--chord); background: transparent;
+    border: 1px dashed var(--chord); font-weight: 700;
+    opacity: 0; transition: opacity 0.1s; padding: 0 4px;
+  }
+  .ed-chord.ghost.show { opacity: 0.55; }
+  .ed-chord.ghost:hover { opacity: 1; background: var(--chord-bg); }
+
+  /* floating action bar over a text selection */
+  .sel-toolbar {
+    position: absolute; z-index: 60; display: none;
+    background: var(--ink); border-radius: 4px; padding: 3px;
+    box-shadow: 0 8px 22px -8px rgba(0,0,0,0.5);
+  }
+  .sel-toolbar.show { display: flex; gap: 4px; }
+  .sel-toolbar button {
+    border: none; background: transparent; color: #fff;
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.04em;
+    text-transform: none; padding: 6px 10px; border-radius: 3px;
+  }
+  .sel-toolbar button:hover { background: var(--accent); color: #fff; }
+
+  /* ---- Raw ChordPro source editor ---- */
+  .source-edit {
+    width: 100%; min-height: 360px; resize: vertical;
+    background: #1c1410; color: #e9dcc0;
+    border: 1px solid var(--ink); border-radius: 3px;
+    padding: 20px 22px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 13.5px; line-height: 1.6;
+    white-space: pre; overflow-wrap: normal; tab-size: 4;
+  }
+  .source-edit:focus { outline: none; border-color: var(--accent); }
 
   .section-label {
     font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600;
@@ -326,10 +443,29 @@
     position: absolute; bottom: 0.28in; right: 0.6in;
     font-size: 10px; color: #999;
   }
-  .page-sheet .rhead { margin-bottom: 16px; }
+  .page-sheet .rhead {
+    margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 0.4in;
+  }
+  .page-sheet .rhead-left { min-width: 0; }
+  .page-sheet .rhead-right {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+    max-width: 3in; flex-shrink: 0; text-align: right;
+  }
   .page-sheet h2 { font-family: var(--exp-lyric-font, 'Fraunces', serif); font-weight: 900; font-size: 26px; margin: 0 0 2px; }
   .page-sheet .credit { font-size: 12px; color: #555; margin-bottom: 2px; }
   .page-sheet .keyline { font-size: 12px; font-weight: 600; margin-bottom: 0; }
+  .page-sheet .roadline {
+    display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end;
+  }
+  .page-sheet .roadline .rchip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: #000; border: 1px solid #000; border-radius: 2px; padding: 1px 5px;
+  }
+  .page-sheet .noteline {
+    font-size: 11px; font-style: italic; color: #444; white-space: pre-wrap;
+    align-self: stretch; text-align: left;
+  }
   .page-sheet .rbody { display: flex; gap: 0.3in; align-items: flex-start; }
   .page-sheet .rcol { flex: 1; min-width: 0; }
   .page-sheet .rblock {
