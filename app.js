@@ -527,12 +527,21 @@ function lineContentLeft(el){
 /* x of a free column (for placing chords on empty / instrumental lines). */
 function chordXForColumn(el, col){ return lineContentLeft(el) + col * getSpaceWidth(); }
 
+/* Gap (px) kept between adjacent free-placed chord tags so they read clearly. */
+const CHORD_MIN_GAP = 6;
+
 function positionChords(){
   chordLayer.innerHTML = '';
   for(const el of editor.children){
     const ln = el.__line;
     if(!ln || ln.type!=='lyric' || !ln.chords || !ln.chords.length) continue;
     const top = el.offsetTop;
+    // On instrumental/blank lines the chords are free-placed over whitespace, so
+    // a single space-width per column packs them tighter than the export, where
+    // cells grow to fit each chord. Lay them out, then push any that would
+    // overlap to the right so the editor reads like the export preview.
+    const freePlaced = (ln.text||'').trim()==='';
+    const placed = [];
     for(const c of ln.chords){
       const tag = document.createElement('span');
       tag.className = 'ed-chord';
@@ -543,6 +552,18 @@ function positionChords(){
       tag.onmousedown = ev => startChordDrag(ev, el, c.off, tag);
       tag.onclick = ev => ev.stopPropagation(); // don't let it bubble to closePop
       chordLayer.appendChild(tag);
+      placed.push({ tag, left: parseFloat(tag.style.left) });
+    }
+    if(freePlaced && placed.length > 1){
+      placed.sort((a,b) => a.left - b.left);
+      for(let i=1; i<placed.length; i++){
+        const prev = placed[i-1];
+        const minLeft = prev.left + prev.tag.offsetWidth + CHORD_MIN_GAP;
+        if(placed[i].left < minLeft){
+          placed[i].left = minLeft;
+          placed[i].tag.style.left = minLeft + 'px';
+        }
+      }
     }
   }
 }
