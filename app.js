@@ -124,6 +124,9 @@ function parseChordPro(text){
     if(line.trim()===''){ out.lines.push({type:'lyric', text:'', chords:[]}); continue; }
     out.lines.push(lineFromSegments(parseSegments(line)));
   }
+  // Trim leading blanks (e.g. the separator the serializer writes after the
+  // metadata block) so they don't accumulate across export/import round trips.
+  while(out.lines.length && isBlank(out.lines[0])) out.lines.shift();
   // Trim trailing blanks
   while(out.lines.length && isBlank(out.lines[out.lines.length-1])) out.lines.pop();
   return out;
