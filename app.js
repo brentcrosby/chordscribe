@@ -558,7 +558,10 @@ function positionChords(){
       placed.sort((a,b) => a.left - b.left);
       for(let i=1; i<placed.length; i++){
         const prev = placed[i-1];
-        const minLeft = prev.left + prev.tag.offsetWidth + CHORD_MIN_GAP;
+        // offsetWidth is the truth; if layout isn't ready (0), estimate from the
+        // chord's character count so we still spread rather than silently stack.
+        const w = prev.tag.offsetWidth || (prev.tag.textContent.length * getSpaceWidth() + 6);
+        const minLeft = prev.left + w + CHORD_MIN_GAP;
         if(placed[i].left < minLeft){
           placed[i].left = minLeft;
           placed[i].tag.style.left = minLeft + 'px';
