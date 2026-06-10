@@ -1412,6 +1412,42 @@ function lineElOfModel(c){
 /* ============================================================
    FONT CONTROLS
    ============================================================ */
+/* Font prefs persist independently of the song so they stick across reloads
+   and across different songs. */
+const FONT_KEY = 'chordscribe:fonts';
+
+function saveFontSettings(){
+  try {
+    localStorage.setItem(FONT_KEY, JSON.stringify({
+      lyricFamily: document.getElementById('fontFamily').value,
+      chordFamily: document.getElementById('chordFamily').value,
+      lyricSize:   document.getElementById('fontSize').value,
+      chordSize:   document.getElementById('chordSize').value,
+    }));
+  } catch(e){ /* quota / private mode — fail silently */ }
+}
+
+/* Restore saved font prefs into the controls. Only assigns a <select> value if
+   the saved option still exists, so removed fonts fall back to the default. */
+function restoreFontSettings(){
+  let f;
+  try { f = JSON.parse(localStorage.getItem(FONT_KEY) || 'null'); } catch(e){}
+  if(!f) return;
+  const setSelect = (id, val) => {
+    if(val == null) return;
+    const sel = document.getElementById(id);
+    if([...sel.options].some(o => o.value === val)) sel.value = val;
+  };
+  const setRange = (id, val) => {
+    if(val == null) return;
+    document.getElementById(id).value = val;
+  };
+  setSelect('fontFamily', f.lyricFamily);
+  setSelect('chordFamily', f.chordFamily);
+  setRange('fontSize', f.lyricSize);
+  setRange('chordSize', f.chordSize);
+}
+
 function applyFont(){
   const fam = document.getElementById('fontFamily').value;
   const chordFam = document.getElementById('chordFamily').value;
@@ -1425,6 +1461,7 @@ function applyFont(){
   document.getElementById('fontSizeVal').textContent = size + 'px';
   document.getElementById('chordSizeVal').textContent = chord + 'px';
   _spaceW = null;
+  saveFontSettings();
   requestAnimationFrame(positionChords);
   if(document.getElementById('modalBg').classList.contains('show')){
     requestAnimationFrame(buildRendered);
@@ -2449,6 +2486,8 @@ For [G]me who [D/F#]Him     [G]   to [D/A]death [A7]pur - [D]sued
 [D]A  -  [A]mazing [D/F#]love! How [G]can  [E7/G#]it     [A]be
 That [D]Thou     my [G]God      shouldst [A]die     for [D]me`;
 
+restoreFontSettings();
+applyFont();
 song = loadLocal() || parseChordPro(SAMPLE);
 render();
 if(document.fonts && document.fonts.ready){ document.fonts.ready.then(positionChords); }
