@@ -719,6 +719,13 @@ function ensureSelToolbar(){
   // mousedown (not click) + preventDefault keeps the text selection alive
   btn.addEventListener('mousedown', e => { e.preventDefault(); clearChordsInSelection(); });
   selToolbar.appendChild(btn);
+
+  const secBtn = document.createElement('button');
+  secBtn.textContent = '¶ Section';
+  secBtn.title = 'Turn the highlighted lines into section headings (toggle)';
+  secBtn.addEventListener('mousedown', e => { e.preventDefault(); makeSectionFromSelection(); });
+  selToolbar.appendChild(secBtn);
+
   document.body.appendChild(selToolbar);
 }
 function hideSelToolbar(){ if(selToolbar) selToolbar.classList.remove('show'); }
@@ -768,6 +775,37 @@ function clearChordsInSelection(){
   updateUndoButtons();
   requestAnimationFrame(updateSelToolbar);
   toast('Cleared chords');
+}
+
+/* Turn every non-blank line the selection touches into a section heading,
+   using its own text as the label. If they're already all sections, toggle
+   them back to plain lyric lines. Chords are dropped on the way to a section
+   (headings don't carry chords) but restored offsets aren't recoverable, so
+   undo is the way back. */
+function makeSectionFromSelection(){
+  const pos = currentPos();
+  if(!pos) return;
+  const touched = [];
+  for(let i=pos.sL; i<=pos.eL; i++){
+    const ln = song.lines[i];
+    if(!isBlank(ln)) touched.push(i);
+  }
+  if(!touched.length){ toast('Nothing to make a section'); return; }
+  const allSections = touched.every(i => song.lines[i].type==='section');
+  pushHistory();                       // snapshot BEFORE mutating
+  for(const i of touched){
+    const ln = song.lines[i];
+    if(allSections){
+      song.lines[i] = { type:'lyric', text: ln.label, chords: [] };
+    } else if(ln.type !== 'section'){
+      song.lines[i] = { type:'section', label: (ln.text||'').replace(/\s+$/,'') };
+    }
+  }
+  renderEditor();
+  setCaret(pos.sL, 0);
+  updateUndoButtons();
+  requestAnimationFrame(updateSelToolbar);
+  toast(allSections ? 'Back to lyrics' : 'Made section');
 }
 
 /* ============================================================
