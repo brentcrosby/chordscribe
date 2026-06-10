@@ -1898,13 +1898,21 @@ function exportTab(which){
   document.getElementById('exportSource').style.display = which==='source'?'block':'none';
 }
 
-let exportCols = 1;
+let exportCols = 'auto';
 
 function setCols(n){
   exportCols = n;
   document.querySelectorAll('.colswitch button').forEach(b => {
-    b.classList.toggle('active', Number(b.dataset.col)===n);
+    const v = b.dataset.col === 'auto' ? 'auto' : Number(b.dataset.col);
+    b.classList.toggle('active', v === n);
   });
+  // The lyric/chord sliders are a *max* in Auto mode and a *fixed* size when a
+  // column count is pinned — relabel so the meaning is obvious.
+  const auto = n === 'auto';
+  const ll = document.getElementById('expLyricLbl');
+  const cl = document.getElementById('expChordLbl');
+  if(ll) ll.textContent = auto ? 'Max lyric size' : 'Lyric size';
+  if(cl) cl.textContent = auto ? 'Max chord size' : 'Chord size';
   buildRendered();
 }
 
@@ -1915,6 +1923,8 @@ const PAGE_PAD = 0.6 * 96;
 const CONTENT_H = PAGE_H - PAGE_PAD * 2;
 const CONTENT_W = PAGE_W - PAGE_PAD * 2;
 const COL_GAP = 0.3 * 96;
+const BLOCK_PAD = 0.12 * 96;   // .rblock right padding, eats into usable column width
+const MIN_LYRIC = 9;           // never auto-shrink lyrics below this
 
 function buildHeadEl(){
   const m = song.meta;
@@ -2049,6 +2059,91 @@ function measureHeights(els, colWidthPx, lyricSize, chordSize){
   return heights;
 }
 
+/* Flow blocks into `cols` newspaper columns, breaking to a new page when the
+   current column is full. Returns the page→column→blockIndex structure. Pure
+   given the measured heights, so the auto-fit search can call it repeatedly. */
+function packPages(blockEls, headH, cols, colWidth, lyricSize, chordSize){
+  const blockH = measureHeights(blockEls, colWidth, lyricSize, chordSize);
+  const pages = [];
+  let pageCols = null, c = 0, fill = 0;
+  const newPage = (reserve) => {
+    pageCols = Array.from({length: cols}, () => []);
+    pages.push(pageCols);
+    c = 0; fill = reserve || 0;
+  };
+  newPage(headH);
+  for(let i=0; i<blockEls.length; i++){
+    const h = blockH[i];
+    if(fill > 0 && fill + h > CONTENT_H){
+      if(c < cols - 1){ c++; fill = 0; }
+      else { newPage(0); }
+    }
+    pageCols[c].push(i);
+    fill += h;
+  }
+  return pages;
+}
+
+function colWidthFor(cols){ return (CONTENT_W - COL_GAP * (cols - 1)) / cols; }
+
+/* Auto fit-to-page: treat the slider values as a *max* and pick the column
+   count + largest font that packs onto a single page. Preference order is
+   biggest lyric font, then fewest columns. If nothing fits on one page even at
+   MIN_LYRIC, fall back to the layout with the fewest pages (then biggest font),
+   keeping the font as large as the page width allows. */
+function chooseAutoLayout(maxLyric, maxChord, headEl, blockEls){
+  const chordRatio = maxLyric > 0 ? maxChord / maxLyric : 1;
+  // Line width scales linearly with font size, so measure once and rescale.
+  const widestRef = measureWidestLine(maxLyric, maxLyric);
+  const headH = (ls, cs) => measureHeights([headEl], CONTENT_W, ls, cs)[0];
+
+  // Largest lyric size that fits the column width for a given column count.
+  const widthCapFor = (cols) => {
+    const usable = colWidthFor(cols) - BLOCK_PAD;
+    if(widestRef <= 0) return maxLyric;
+    return Math.min(maxLyric, maxLyric * usable / widestRef);
+  };
+
+  let best = null;
+  for(const cols of [1, 2, 3]){
+    const colW = colWidthFor(cols);
+    const widthCap = widthCapFor(cols);
+    if(widthCap < MIN_LYRIC - 0.01) continue;   // can't fit width even at min
+    const pagesAt = (ls) =>
+      packPages(blockEls, headH(ls, ls * chordRatio), cols, colW, ls, ls * chordRatio).length;
+
+    let fitFont = null;
+    if(pagesAt(widthCap) <= 1){
+      fitFont = widthCap;                        // already fits at the biggest width-legal size
+    } else if(pagesAt(MIN_LYRIC) <= 1){
+      let lo = MIN_LYRIC, hi = widthCap;         // binary-search the largest single-page size
+      for(let k=0; k<7; k++){
+        const mid = (lo + hi) / 2;
+        if(pagesAt(mid) <= 1) lo = mid; else hi = mid;
+      }
+      fitFont = lo;
+    }
+    if(fitFont != null && (!best || fitFont > best.lyricSize + 0.01)){
+      best = { cols, lyricSize: fitFont, chordSize: fitFont * chordRatio };
+    }
+  }
+  if(best) return best;
+
+  // Nothing fits on one page: minimize page count, then maximize font.
+  let fb = null;
+  for(const cols of [1, 2, 3]){
+    const colW = colWidthFor(cols);
+    const ls = Math.max(widthCapFor(cols), MIN_LYRIC);
+    const cs = ls * chordRatio;
+    const pages = packPages(blockEls, headH(ls, cs), cols, colW, ls, cs).length;
+    if(!fb || pages < fb.pages - 0.01 ||
+       (Math.abs(pages - fb.pages) < 0.01 && ls > fb.lyricSize + 0.01)){
+      fb = { cols, lyricSize: ls, chordSize: cs, pages };
+    }
+  }
+  return fb;
+}
+
 function buildRendered(){
   const area = document.getElementById('renderArea');
   area.innerHTML = '';
@@ -2059,52 +2154,39 @@ function buildRendered(){
   const lyricFont = document.getElementById('fontFamily').value;
   const chordFont = document.getElementById('chordFamily').value;
 
-  const cols = exportCols;
-  const colWidth = (CONTENT_W - COL_GAP * (cols - 1)) / cols;
-  const blockPad = 0.12 * 96;
-  const usableColW = colWidth - blockPad;
-
-  const MIN_LYRIC = 9;
-  let lyricSize = baseLyricSize;
-  let chordSize = baseChordSize;
-  const widest = measureWidestLine(baseLyricSize, baseChordSize);
-  if(widest > usableColW && widest > 0){
-    let scale = usableColW / widest;
-    const minScale = Math.min(1, MIN_LYRIC / baseLyricSize);
-    scale = Math.max(scale, minScale);
-    lyricSize = baseLyricSize * scale;
-    chordSize = baseChordSize * scale;
-  }
-  const shrunk = lyricSize < baseLyricSize - 0.2;
-  document.getElementById('expLyricVal').textContent =
-    shrunk ? `${baseLyricSize}px → ${lyricSize.toFixed(1)}px` : `${baseLyricSize}px`;
-  document.getElementById('expChordVal').textContent =
-    shrunk ? `${baseChordSize}px → ${chordSize.toFixed(1)}px` : `${baseChordSize}px`;
-
   const headEl = buildHeadEl();
   const blockEls = buildBlockEls();
 
-  const headH = measureHeights([headEl], CONTENT_W, lyricSize, chordSize)[0];
-  const blockH = measureHeights(blockEls, colWidth, lyricSize, chordSize);
-
-  const pages = [];
-  let pageCols = null, c = 0, fill = 0;
-  const newPage = (reserve) => {
-    pageCols = Array.from({length: cols}, () => []);
-    pages.push(pageCols);
-    c = 0; fill = reserve || 0;
-  };
-  newPage(headH);
-
-  for(let i=0; i<blockEls.length; i++){
-    const h = blockH[i];
-    if(fill > 0 && fill + h > CONTENT_H){
-      if(c < cols - 1){ c++; fill = 0; }
-      else { newPage(0); }
+  let cols, lyricSize, chordSize;
+  if(exportCols === 'auto'){
+    const pick = chooseAutoLayout(baseLyricSize, baseChordSize, headEl, blockEls);
+    cols = pick.cols; lyricSize = pick.lyricSize; chordSize = pick.chordSize;
+  } else {
+    cols = exportCols;
+    const usableColW = colWidthFor(cols) - BLOCK_PAD;
+    lyricSize = baseLyricSize;
+    chordSize = baseChordSize;
+    const widest = measureWidestLine(baseLyricSize, baseChordSize);
+    if(widest > usableColW && widest > 0){
+      let scale = usableColW / widest;
+      const minScale = Math.min(1, MIN_LYRIC / baseLyricSize);
+      scale = Math.max(scale, minScale);
+      lyricSize = baseLyricSize * scale;
+      chordSize = baseChordSize * scale;
     }
-    pageCols[c].push(i);
-    fill += h;
   }
+
+  // Show "13px → 18.0px" whenever the rendered size differs from the slider,
+  // whether auto grew it to fill the page or shrank it to fit the width.
+  const changed = Math.abs(lyricSize - baseLyricSize) > 0.2;
+  document.getElementById('expLyricVal').textContent =
+    changed ? `${baseLyricSize}px → ${lyricSize.toFixed(1)}px` : `${baseLyricSize}px`;
+  document.getElementById('expChordVal').textContent =
+    changed ? `${baseChordSize}px → ${chordSize.toFixed(1)}px` : `${baseChordSize}px`;
+
+  const colWidth = colWidthFor(cols);
+  const headH = measureHeights([headEl], CONTENT_W, lyricSize, chordSize)[0];
+  const pages = packPages(blockEls, headH, cols, colWidth, lyricSize, chordSize);
 
   pages.forEach((pageCols, pi) => {
     const sheet = document.createElement('div');

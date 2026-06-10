@@ -177,19 +177,20 @@
           <span class="ec-group">
             <label>Columns</label>
             <div class="colswitch">
-              <button class="active" data-col="1" onclick="setCols(1)">1</button>
+              <button class="active" data-col="auto" onclick="setCols('auto')">Auto</button>
+              <button data-col="1" onclick="setCols(1)">1</button>
               <button data-col="2" onclick="setCols(2)">2</button>
               <button data-col="3" onclick="setCols(3)">3</button>
             </div>
           </span>
           <span class="ec-group">
-            <label>Lyric size</label>
-            <input id="expLyricSize" type="range" min="9" max="20" value="13" oninput="buildRendered()">
-            <span id="expLyricVal" class="fb-val">13px</span>
+            <label id="expLyricLbl">Max lyric size</label>
+            <input id="expLyricSize" type="range" min="9" max="28" value="14" oninput="buildRendered()">
+            <span id="expLyricVal" class="fb-val">14px</span>
           </span>
           <span class="ec-group">
-            <label>Chord size</label>
-            <input id="expChordSize" type="range" min="8" max="18" value="12" oninput="buildRendered()">
+            <label id="expChordLbl">Max chord size</label>
+            <input id="expChordSize" type="range" min="8" max="24" value="13" oninput="buildRendered()">
             <span id="expChordVal" class="fb-val">12px</span>
           </span>
         </div>
