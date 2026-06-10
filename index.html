@@ -64,7 +64,18 @@
   </div>
 
   <div class="header-fields">
-    <div class="meta-bar" id="metaBar"></div>
+    <div class="meta-col">
+      <div class="meta-bar" id="metaBar"></div>
+
+      <div class="modulate-bar">
+        <label>Modulate song</label>
+        <div class="mod-control">
+          <button onclick="modulateSong(-1)" title="Transpose the whole song down a half step">♭ −1</button>
+          <button onclick="modulateSong(1)" title="Transpose the whole song up a half step">♯ +1</button>
+        </div>
+        <span class="mod-hint">or highlight words to modulate just their chords</span>
+      </div>
+    </div>
 
     <div class="roadmap-bar">
       <label for="roadmapInput">Road map</label>

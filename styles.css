@@ -98,11 +98,14 @@
     display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start;
     justify-content: space-between; margin-bottom: 18px;
   }
+  .meta-col {
+    display: flex; flex-direction: column; gap: 16px;
+    flex: 1 1 360px; min-width: 0;
+  }
   .meta-bar {
     display: flex; gap: 18px 18px; flex-wrap: wrap; align-content: flex-start;
     align-items: flex-start;
     font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft);
-    flex: 1 1 360px;
   }
   .meta-bar .field { display: flex; align-items: center; gap: 6px; }
   .meta-bar label { text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; }
@@ -113,6 +116,18 @@
   }
   .meta-bar input:focus { outline: none; border-bottom-color: var(--accent); }
   .meta-bar input.title-inp { width: 240px; font-weight: 600; font-size: 15px; }
+
+  /* Modulation — transpose the whole song up/down a half step */
+  .modulate-bar { display: flex; align-items: center; gap: 10px; }
+  .modulate-bar label {
+    font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; color: var(--ink-soft);
+  }
+  .modulate-bar .mod-control { display: flex; gap: 6px; }
+  .modulate-bar button { padding: 6px 12px; }
+  .modulate-bar .mod-hint {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft);
+  }
 
   /* Road map + notes — compact label/control grid, right side of the row */
   .roadmap-bar {

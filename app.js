@@ -262,6 +262,100 @@ function collectChords(){
 }
 
 /* ============================================================
+   MODULATION  (transpose chords by semitones)
+   A chord is root note + quality, optionally with a "/bass" note. We
+   transpose the root and the bass, leaving the quality (m7, sus4, add9…)
+   untouched. Accidental spelling follows the song key: a flat key spells
+   the moved notes with flats, otherwise sharps.
+   ============================================================ */
+const SHARP_NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const FLAT_NOTES  = ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+const NOTE_BASE = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+
+function noteToIndex(note){
+  let i = NOTE_BASE[note[0].toUpperCase()];
+  if(i === undefined) return null;
+  for(let k=1; k<note.length; k++){
+    const ch = note[k];
+    if(ch==='#' || ch==='♯') i++;
+    else if(ch==='b' || ch==='♭') i--;
+    else break;
+  }
+  return ((i % 12) + 12) % 12;
+}
+
+function transposeNote(note, semis, flats){
+  const idx = noteToIndex(note);
+  if(idx === null) return note;
+  const ni = ((idx + semis) % 12 + 12) % 12;
+  return (flats ? FLAT_NOTES : SHARP_NOTES)[ni];
+}
+
+/* Transpose a chord symbol (e.g. "F#m7", "D/F#") by `semis` half steps. */
+function transposeChord(chord, semis, flats){
+  if(!chord || !semis) return chord;
+  return chord.split('/').map(part => {
+    const m = part.match(/^(\s*)([A-Ga-g][#b♯♭]?)(.*)$/);
+    if(!m) return part;
+    return m[1] + transposeNote(m[2], semis, flats) + m[3];
+  }).join('/');
+}
+
+/* Whether to spell moved notes with flats — follows the song key. */
+function preferFlats(key){
+  if(key && /[b♭]/.test(key.replace(/^.*\//,''))) return true;   // flat key
+  return false;                                                  // default: sharps
+}
+
+/* Modulate the WHOLE song (every chord + the key field). */
+function modulateSong(semis){
+  const hasChords = song.lines.some(ln => ln.type==='lyric' && ln.chords && ln.chords.length);
+  if(!hasChords && !song.meta.key){ toast('Nothing to modulate'); return; }
+  const flats = preferFlats(song.meta.key);
+  pushHistory();
+  for(const ln of song.lines){
+    if(ln.type!=='lyric' || !ln.chords) continue;
+    for(const c of ln.chords) c.chord = transposeChord(c.chord, semis, flats);
+  }
+  if(song.meta.key) song.meta.key = transposeChord(song.meta.key, semis, flats);
+  render();
+  toast('Modulated ' + (semis>0 ? 'up' : 'down') + ' a half step');
+}
+
+/* Collect refs to the chords that fall inside the current text selection. */
+function chordsInSelection(pos){
+  const hits = [];
+  for(let i=pos.sL; i<=pos.eL; i++){
+    const ln = song.lines[i];
+    if(ln.type!=='lyric' || !ln.chords) continue;
+    for(const c of ln.chords){
+      const inSel = (pos.sL===pos.eL) ? (c.off>=pos.sOff && c.off<=pos.eOff)
+                  : (i===pos.sL)      ? (c.off>=pos.sOff)
+                  : (i===pos.eL)      ? (c.off<=pos.eOff)
+                  : true;
+      if(inSel) hits.push(c);
+    }
+  }
+  return hits;
+}
+
+/* Modulate only the chords above the highlighted words. */
+function modulateSelection(semis){
+  const pos = currentPos();
+  if(!pos){ toast('Highlight some words first'); return; }
+  const hits = chordsInSelection(pos);
+  if(!hits.length){ toast('No chords in selection'); return; }
+  const flats = preferFlats(song.meta.key);
+  pushHistory();                       // snapshot BEFORE mutating
+  for(const c of hits) c.chord = transposeChord(c.chord, semis, flats);
+  // only chords (the overlay) changed — text DOM and the selection stay put
+  positionChords();
+  updateUndoButtons();
+  requestAnimationFrame(updateSelToolbar);
+  toast('Modulated selection ' + (semis>0 ? 'up' : 'down'));
+}
+
+/* ============================================================
    THE EDITOR  (unified, WYSIWYG)
    ============================================================ */
 const editor = document.getElementById('editor');
@@ -725,6 +819,18 @@ function ensureSelToolbar(){
   secBtn.title = 'Turn the highlighted lines into section headings (toggle)';
   secBtn.addEventListener('mousedown', e => { e.preventDefault(); makeSectionFromSelection(); });
   selToolbar.appendChild(secBtn);
+
+  const modDown = document.createElement('button');
+  modDown.textContent = '♭ −1';
+  modDown.title = 'Transpose the highlighted chords down a half step';
+  modDown.addEventListener('mousedown', e => { e.preventDefault(); modulateSelection(-1); });
+  selToolbar.appendChild(modDown);
+
+  const modUp = document.createElement('button');
+  modUp.textContent = '♯ +1';
+  modUp.title = 'Transpose the highlighted chords up a half step';
+  modUp.addEventListener('mousedown', e => { e.preventDefault(); modulateSelection(1); });
+  selToolbar.appendChild(modUp);
 
   document.body.appendChild(selToolbar);
 }
