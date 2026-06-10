@@ -214,6 +214,17 @@
     user-select: none;
   }
   .ed-chord:hover { outline: 1px solid var(--chord); }
+  .ed-chord.selected {
+    outline: 2px solid var(--chord);
+    background: var(--chord-bg);
+    box-shadow: 0 0 0 2px rgba(201,185,148,0.35);
+  }
+  .chord-marquee {
+    position: absolute; z-index: 6; pointer-events: none;
+    border: 1px solid var(--chord);
+    background: rgba(201,185,148,0.18);
+    border-radius: 2px;
+  }
   .ed-chord.dragging {
     cursor: grabbing; z-index: 5; opacity: 0.92;
     box-shadow: 0 4px 12px -3px rgba(0,0,0,0.4);

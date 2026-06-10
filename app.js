@@ -363,6 +363,7 @@ const editorWrap = document.getElementById('editorWrap');
 const chordLayer = document.getElementById('chordLayer');
 
 function render(){
+  chordSel = [];   // model is being rebuilt; old chord refs are now stale
   renderMeta();
   renderRoadmap();
   if(typeof view !== 'undefined' && view === 'source'){
@@ -530,6 +531,85 @@ function chordXForColumn(el, col){ return lineContentLeft(el) + col * getSpaceWi
 /* Gap (px) kept between adjacent free-placed chord tags so they read clearly. */
 const CHORD_MIN_GAP = 6;
 
+/* ---- multi-select of free-placed chords (marquee / shift-click) ----
+   chordSel holds {ln, c} pairs referencing live model chord objects, so the
+   selection survives positionChords() re-renders (the model objects persist). */
+let chordSel = [];
+let marqueeActive = false;
+function isFreePlacedLine(ln){ return ln && ln.type==='lyric' && (ln.text||'').trim()===''; }
+function isChordSelected(c){ return chordSel.some(s => s.c === c); }
+function clearChordSel(){ if(chordSel.length){ chordSel = []; paintSelection(); } }
+function toggleChordSel(ln, c){
+  const i = chordSel.findIndex(s => s.c === c);
+  if(i>=0) chordSel.splice(i,1); else chordSel.push({ ln, c });
+  paintSelection();
+}
+function mergeSel(base, add){
+  const out = base.slice();
+  for(const a of add){ if(!out.some(s => s.c === a.c)) out.push(a); }
+  return out;
+}
+/* Refresh just the .selected classes without re-laying-out the chords. */
+function paintSelection(){
+  for(const t of chordLayer.children){ if(t.__c) t.classList.toggle('selected', isChordSelected(t.__c)); }
+}
+
+/* ---- copy / cut / paste of selected chords ----
+   chordClip stores each chord with a column offset relative to the left-most
+   one, so a paste re-creates the same shape (and varying gaps) at a new anchor.
+   This is an in-app clipboard; it doesn't touch the system clipboard. */
+let chordClip = null;
+let lastMouseX = 0, lastMouseY = 0;
+document.addEventListener('mousemove', e => { lastMouseX = e.clientX; lastMouseY = e.clientY; });
+
+function copyChordSel(){
+  if(!chordSel.length) return false;
+  const min = Math.min(...chordSel.map(s => s.c.off));
+  chordClip = chordSel.map(s => ({ chord: s.c.chord, rel: s.c.off - min }));
+  return true;
+}
+function deleteChordSel(){
+  if(!chordSel.length) return false;
+  pushHistory();
+  for(const s of chordSel){ s.ln.chords = s.ln.chords.filter(c => c !== s.c); }
+  chordSel = [];
+  renderEditor();
+  updateUndoButtons();
+  return true;
+}
+function cutChordSel(){
+  if(!copyChordSel()) return false;
+  return deleteChordSel();
+}
+/* Paste the clipboard onto a target line, anchoring the left-most chord at the
+   column under the cursor and selecting the result so it can be nudged. */
+function pasteChords(lineEl){
+  if(!chordClip || !chordClip.length || !lineEl) return false;
+  const ln = lineEl.__line;
+  if(ln.type !== 'lyric') return false;
+  const t = computeTarget(lineEl, lastMouseX);
+  const base = t ? t.off : (ln.text || '').length;
+  pushHistory();
+  const maxOff = base + Math.max(...chordClip.map(c => c.rel));
+  if((ln.text || '').trim() === '' && (ln.text || '').length < maxOff){
+    ln.text = (ln.text || '') + ' '.repeat(maxOff - (ln.text || '').length);
+  }
+  const newSel = [];
+  for(const item of chordClip){
+    const off = base + item.rel;
+    ln.chords = (ln.chords || []).filter(c => c.off !== off);
+    const nc = { off, chord: item.chord };
+    ln.chords.push(nc);
+    newSel.push({ ln, c: nc });
+  }
+  ln.chords.sort((a,b)=>a.off-b.off);
+  renderEditor();
+  chordSel = newSel;
+  paintSelection();
+  updateUndoButtons();
+  return true;
+}
+
 function positionChords(){
   chordLayer.innerHTML = '';
   for(const el of editor.children){
@@ -544,12 +624,13 @@ function positionChords(){
     const placed = [];
     for(const c of ln.chords){
       const tag = document.createElement('span');
-      tag.className = 'ed-chord';
+      tag.className = 'ed-chord' + (isChordSelected(c) ? ' selected' : '');
       tag.textContent = c.chord;
       tag.style.left = chordX(el, c.off) + 'px';
       tag.style.top = top + 'px';
       tag.dataset.off = c.off;
-      tag.onmousedown = ev => startChordDrag(ev, el, c.off, tag);
+      tag.__c = c; tag.__ln = ln;
+      tag.onmousedown = ev => startChordDrag(ev, el, c, tag);
       tag.onclick = ev => ev.stopPropagation(); // don't let it bubble to closePop
       chordLayer.appendChild(tag);
       placed.push({ tag, left: parseFloat(tag.style.left) });
@@ -1092,7 +1173,7 @@ function lineFromPoint(cx, cy){
 }
 
 editorWrap.addEventListener('mousemove', e => {
-  if(draggingChord){ hideGhost(); return; }
+  if(draggingChord || marqueeActive){ hideGhost(); return; }
   if(ghostEl && (e.target === ghostEl)) return;       // keep showing while hovering it
   const lineEl = e.target.closest ? e.target.closest('.line') : null;
   const cx = e.clientX;
@@ -1101,6 +1182,86 @@ editorWrap.addEventListener('mousemove', e => {
   ghostRAF = requestAnimationFrame(() => updateGhost(lineEl, cx));
 });
 editorWrap.addEventListener('mouseleave', () => { if(!draggingChord) hideGhost(); });
+
+/* ---- marquee selection of free-placed chords ----
+   A drag that starts on a blank/instrumental line (not on a chord) rubber-bands
+   a box and selects the chords it touches. Lyric lines are left alone so normal
+   text selection still works. Shift adds to the existing selection. */
+editorWrap.addEventListener('mousedown', e => {
+  if(e.button !== 0) return;
+  if(e.target.closest && e.target.closest('.ed-chord')) return;   // chord owns its own drag
+  const lineEl = lineFromPoint(e.clientX, e.clientY);
+  // Clicking lyric/section text drops the chord selection so it can't shadow a
+  // normal text copy; marquee only runs on blank/instrumental lines.
+  if(!lineEl || !isFreePlacedLine(lineEl.__line)){ clearChordSel(); return; }
+
+  const startX = e.clientX, startY = e.clientY;
+  const additive = e.shiftKey;
+  const baseSel = additive ? chordSel.slice() : [];
+  let box = null;
+
+  const onMove = ev => {
+    if(!marqueeActive){
+      if(Math.hypot(ev.clientX-startX, ev.clientY-startY) < 4) return;
+      marqueeActive = true;
+      box = document.createElement('div'); box.className = 'chord-marquee';
+      editorWrap.appendChild(box);
+    }
+    const s = getSelection(); if(s) s.removeAllRanges();   // suppress contenteditable text drag
+    const wr = editorWrap.getBoundingClientRect();
+    const x1 = Math.min(startX, ev.clientX), x2 = Math.max(startX, ev.clientX);
+    const y1 = Math.min(startY, ev.clientY), y2 = Math.max(startY, ev.clientY);
+    box.style.left = (x1 - wr.left) + 'px'; box.style.top = (y1 - wr.top) + 'px';
+    box.style.width = (x2 - x1) + 'px'; box.style.height = (y2 - y1) + 'px';
+    const hit = [];
+    for(const t of chordLayer.children){
+      if(!t.__c || !isFreePlacedLine(t.__ln)) continue;
+      const r = t.getBoundingClientRect();
+      if(r.right >= x1 && r.left <= x2 && r.bottom >= y1 && r.top <= y2) hit.push({ ln:t.__ln, c:t.__c });
+    }
+    chordSel = mergeSel(baseSel, hit);
+    paintSelection();
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if(box) box.remove();
+    if(!marqueeActive){ if(!additive) clearChordSel(); }   // a plain click clears
+    marqueeActive = false;
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+});
+
+/* Escape drops the chord selection; Delete/Backspace removes the selected
+   chords (but only when text editing isn't underway, so lyric editing is safe). */
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){ clearChordSel(); return; }
+  if(e.key === 'Delete' || e.key === 'Backspace'){
+    const ae = document.activeElement;
+    const inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA');
+    const hasText = !!String(getSelection() || '').length;
+    if(chordSel.length && !inField && !hasText){ e.preventDefault(); deleteChordSel(); }
+  }
+});
+
+/* Copy / cut / paste selected chords. Copy & cut act whenever chords are
+   selected; paste only hijacks Cmd/Ctrl+V when the cursor is hovering a
+   blank/instrumental line, so pasting text into lyrics is left untouched. */
+document.addEventListener('keydown', e => {
+  if(!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  const ae = document.activeElement;
+  const inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA');
+  const hasText = !!String(getSelection() || '').length;   // real text selection wins
+  if((k === 'c' || k === 'x') && chordSel.length && !inField && !hasText){
+    e.preventDefault();
+    if(k === 'c') copyChordSel(); else cutChordSel();
+  } else if(k === 'v' && chordClip && chordClip.length && !inField){
+    const lineEl = lineFromPoint(lastMouseX, lastMouseY);
+    if(lineEl && isFreePlacedLine(lineEl.__line)){ e.preventDefault(); pasteChords(lineEl); }
+  }
+});
 
 function updateGhost(lineEl, cx){
   const t = computeTarget(lineEl, cx);
@@ -1119,9 +1280,21 @@ function hideGhost(){ if(ghostEl) ghostEl.classList.remove('show'); }
 
 /* ---- drag a chord to a new word / spot ---- */
 let draggingChord = false;
-function startChordDrag(ev, lineEl, off, tag){
-  ev.preventDefault(); ev.stopPropagation();
+function startChordDrag(ev, lineEl, c, tag){
   if(ev.button !== 0) return;                 // left button only
+  ev.preventDefault(); ev.stopPropagation();
+  const off = c.off;
+
+  // Shift+click toggles this chord in the multi-selection (no drag).
+  if(ev.shiftKey){ toggleChordSel(lineEl.__line, c); return; }
+
+  // Mousedown on a chord that's part of a multi-selection → drag them together,
+  // preserving the varying gaps between them.
+  if(isChordSelected(c) && chordSel.length > 1){ startGroupDrag(ev, c, tag); return; }
+
+  // Otherwise this is a fresh single-chord interaction; drop any old selection.
+  clearChordSel();
+
   const startX = ev.clientX, startY = ev.clientY;
   const wrapRect = () => editorWrap.getBoundingClientRect();
   let moved = false;
@@ -1178,6 +1351,62 @@ function moveChord(fromEl, fromOff, toEl, toOff, pad){
   if(padded) renderEditor();
   else positionChords();
   updateUndoButtons();
+}
+
+/* Drag every selected chord as a rigid group: shift them all by the same number
+   of columns so the gaps between them are preserved. */
+function startGroupDrag(ev, anchor, anchorTag){
+  const startX = ev.clientX, startY = ev.clientY;
+  const spaceW = getSpaceWidth();
+  const minOff = Math.min(...chordSel.map(s => s.c.off));
+  // Snapshot the on-screen position of each selected tag so we can preview the
+  // shift by sliding them, without disturbing their relative spacing.
+  const tags = [];
+  for(const t of chordLayer.children){
+    if(t.__c && isChordSelected(t.__c)) tags.push({ tag:t, baseLeft: parseFloat(t.style.left) });
+  }
+  let moved = false, delta = 0;
+
+  const onMove = e => {
+    if(!moved && Math.hypot(e.clientX-startX, e.clientY-startY) < 4) return;
+    if(!moved){ moved = true; draggingChord = true; editorWrap.classList.add('dragging'); hideGhost(); for(const g of tags) g.tag.classList.add('dragging'); }
+    // Clamp so the left-most chord never crosses column 0.
+    delta = Math.max(Math.round((e.clientX - startX) / spaceW), -minOff);
+    for(const g of tags) g.tag.style.left = (g.baseLeft + delta * spaceW) + 'px';
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    for(const g of tags) g.tag.classList.remove('dragging');
+    editorWrap.classList.remove('dragging');
+    draggingChord = false;
+    if(!moved){ openChordPop(anchorTag, lineElOfModel(anchor), anchor.off); return; }  // plain click
+    if(delta) shiftSelectedChords(delta);
+    else positionChords();
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+/* Apply a column shift to every selected chord, padding each affected line's
+   whitespace so the chords still have room to sit. Keeps the selection. */
+function shiftSelectedChords(delta){
+  pushHistory();
+  const lines = new Set(chordSel.map(s => s.ln));
+  for(const s of chordSel) s.c.off = Math.max(0, s.c.off + delta);
+  for(const ln of lines){
+    ln.chords.sort((a,b)=>a.off-b.off);
+    const maxOff = ln.chords.reduce((m,c)=>Math.max(m, c.off), 0);
+    if((ln.text||'').length < maxOff) ln.text = (ln.text||'') + ' '.repeat(maxOff - ln.text.length);
+  }
+  renderEditor();
+  updateUndoButtons();
+}
+
+/* The .line element backing a model line that owns the given chord. */
+function lineElOfModel(c){
+  for(const el of editor.children){ if((el.__line.chords||[]).includes(c)) return el; }
+  return null;
 }
 
 /* ============================================================
