@@ -1605,6 +1605,96 @@ function shiftSelectedChords(delta){
   updateUndoButtons();
 }
 
+/* Set every selected chord to the same name (bulk relabel). Keeps the
+   selection so you can immediately retype or nudge them. */
+function setSelectedChords(val){
+  if(!chordSel.length || !val) return false;
+  pushHistory();
+  for(const s of chordSel) s.c.chord = val;
+  renderEditor();
+  paintSelection();
+  updateUndoButtons();
+  return true;
+}
+
+/* Popover to relabel all selected chords at once. Anchored at the first
+   selected chord; Enter (or Set / a quick-chord) applies to the whole set. */
+function openBulkChordPop(prefill){
+  if(!chordSel.length) return;
+  closePop();
+  let anchorEl = null;
+  for(const t of chordLayer.children){ if(t.__c === chordSel[0].c){ anchorEl = t; break; } }
+  if(!anchorEl) return;
+
+  const pop = document.createElement('div');
+  pop.className = 'pop';
+  pop.onclick = e => e.stopPropagation();
+
+  const title = document.createElement('div'); title.className='poptitle';
+  title.textContent = `Set ${chordSel.length} chord${chordSel.length>1?'s':''}`;
+  pop.appendChild(title);
+
+  const inp = document.createElement('input');
+  inp.value = prefill || '';
+  inp.placeholder = 'e.g. D, G, A7, D/F#';
+  pop.appendChild(inp);
+
+  const apply = val => { setSelectedChords(val); closePop(); };
+
+  const used = collectChords();
+  if(used.length){
+    const qr = document.createElement('div'); qr.className='quickrow';
+    used.slice(0,12).forEach(c => {
+      const b=document.createElement('span'); b.className='q'; b.textContent=c;
+      b.onmousedown = e => e.preventDefault();
+      b.onclick = () => apply(c);
+      qr.appendChild(b);
+    });
+    pop.appendChild(qr);
+  }
+
+  const btns = document.createElement('div'); btns.className='popbtns';
+  const save = document.createElement('button'); save.textContent='Set'; save.className='primary';
+  save.onclick = () => apply(inp.value.trim());
+  btns.appendChild(save);
+  pop.appendChild(btns);
+
+  document.body.appendChild(pop);
+  const r = anchorEl.getBoundingClientRect();
+  let top = window.scrollY + r.bottom + 6;
+  let left = window.scrollX + r.left;
+  if(left + 230 > window.innerWidth) left = window.innerWidth - 240;
+  pop.style.top = top+'px'; pop.style.left = left+'px';
+  activePop = pop;
+  inp.focus();
+  // Prefill (started by typing): put the caret at the end. Otherwise select all.
+  if(prefill){ const v = inp.value; inp.setSelectionRange(v.length, v.length); }
+  else inp.select();
+  pop.onkeydown = e => {
+    if(e.key==='Enter'){ e.preventDefault(); apply(inp.value.trim()); }
+    if(e.key==='Escape'){ closePop(); }
+  };
+}
+
+/* With chords multi-selected, Enter opens the bulk relabel editor; typing a
+   chord character opens it pre-filled. Skipped while editing text in a field
+   or the lyric surface, or when a real text selection exists. */
+document.addEventListener('keydown', e => {
+  if(!chordSel.length) return;
+  if(e.metaKey || e.ctrlKey || e.altKey) return;
+  if(activePop) return;                                  // editor already open
+  const ae = document.activeElement;
+  // INPUT/TEXTAREA = the meta / roadmap / source fields; never hijack those.
+  // The lyric surface is contenteditable, but we only get here with chords
+  // already selected (a deliberate act), so bulk-relabel takes priority there.
+  if(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+  if(String(getSelection() || '').length) return;        // real text selection
+  if(e.key === 'Enter'){ e.preventDefault(); openBulkChordPop(); return; }
+  // A single printable character (a chord usually starts with A-G) kicks off
+  // the editor pre-filled with that character.
+  if(e.key.length === 1 && !/\s/.test(e.key)){ e.preventDefault(); openBulkChordPop(e.key); }
+});
+
 /* The .line element backing a model line that owns the given chord. */
 function lineElOfModel(c){
   for(const el of editor.children){ if((el.__line.chords||[]).includes(c)) return el; }
@@ -2089,7 +2179,147 @@ document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id
 function openHelp(){ document.getElementById('helpBg').classList.add('show'); }
 function closeHelp(){ document.getElementById('helpBg').classList.remove('show'); }
 document.getElementById('helpBg').addEventListener('click', e=>{ if(e.target.id==='helpBg') closeHelp(); });
-document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeHelp(); closeProjects(); } });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeHelp(); closeProjects(); closeFind(); } });
+
+/* ============================================================
+   FIND & REPLACE — across lyric text, section headings and chords.
+   Lyric replacements keep chord offsets aligned by shifting every chord
+   that sits after (or inside) a replaced run.
+   ============================================================ */
+let findScope = 'both';
+function setFindScope(s){
+  findScope = s;
+  for(const b of document.getElementById('findScope').children){
+    b.classList.toggle('active', b.dataset.scope === s);
+  }
+  updateFindCount();
+}
+function openFind(){
+  document.getElementById('findBg').classList.add('show');
+  const inp = document.getElementById('findInput');
+  inp.focus(); inp.select();
+  updateFindCount();
+}
+function closeFind(){ document.getElementById('findBg').classList.remove('show'); }
+document.getElementById('findBg').addEventListener('click', e=>{ if(e.target.id==='findBg') closeFind(); });
+['findInput','findCase','findWhole'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', updateFindCount);
+});
+document.getElementById('findInput').addEventListener('keydown', e=>{
+  if(e.key==='Enter'){ e.preventDefault(); doReplaceAll(); }
+});
+document.getElementById('replaceInput').addEventListener('keydown', e=>{
+  if(e.key==='Enter'){ e.preventDefault(); doReplaceAll(); }
+});
+/* Ctrl/Cmd+F opens our editor's find rather than the browser's, since the
+   chords live in a separate overlay the browser's find can't see anyway. */
+document.addEventListener('keydown', e=>{
+  if((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase()==='f'){
+    e.preventDefault(); openFind();
+  }
+});
+
+function findOpts(){
+  return {
+    find: document.getElementById('findInput').value,
+    repl: document.getElementById('replaceInput').value,
+    caseSensitive: document.getElementById('findCase').checked,
+    whole: document.getElementById('findWhole').checked,
+  };
+}
+function buildFindRegex(find, o){
+  let pat = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if(o.whole) pat = '\\b' + pat + '\\b';
+  return new RegExp(pat, o.caseSensitive ? 'g' : 'gi');
+}
+/* All match spans of `re` in `str` (guards against zero-length loops). */
+function matchSpans(re, str){
+  const out = []; let m; re.lastIndex = 0;
+  while((m = re.exec(str))){
+    out.push({ start: m.index, end: m.index + m[0].length });
+    if(m.index === re.lastIndex) re.lastIndex++;
+  }
+  return out;
+}
+/* Map an old column to its new column after a set of replacements. A chord
+   that landed inside a replaced run is pulled back to the run's start. */
+function mapChordOffset(off, spans, deltaPer){
+  let newOff = off;
+  for(let i=0;i<spans.length;i++){
+    const s = spans[i];
+    if(off >= s.end) newOff += deltaPer[i];
+    else if(off > s.start){ newOff -= (off - s.start); break; }
+    else break;
+  }
+  return Math.max(0, newOff);
+}
+/* Replace inside a lyric line, returning match count and fixing chord offsets. */
+function replaceLyricLine(ln, re, repl){
+  const text = ln.text || '';
+  const spans = matchSpans(re, text);
+  if(!spans.length) return 0;
+  const deltaPer = spans.map(s => repl.length - (s.end - s.start));
+  let result = '', prev = 0;
+  for(const s of spans){ result += text.slice(prev, s.start) + repl; prev = s.end; }
+  result += text.slice(prev);
+  ln.text = result;
+  if(ln.chords) for(const c of ln.chords) c.off = mapChordOffset(c.off, spans, deltaPer);
+  return spans.length;
+}
+/* Count or apply a replace across the whole song. Returns the match count. */
+function runReplace(apply){
+  const o = findOpts();
+  if(!o.find) return 0;
+  const re = buildFindRegex(o.find, o);
+  const doLyrics = findScope === 'lyrics' || findScope === 'both';
+  const doChords = findScope === 'chords' || findScope === 'both';
+  let count = 0;
+  for(const ln of song.lines){
+    if(doLyrics && ln.type === 'section'){
+      const spans = matchSpans(re, ln.label || '');
+      count += spans.length;
+      if(apply && spans.length) ln.label = (ln.label || '').replace(re, o.repl);
+    }
+    if(ln.type === 'lyric'){
+      if(doLyrics){
+        if(apply) count += replaceLyricLine(ln, re, o.repl);
+        else count += matchSpans(re, ln.text || '').length;
+      }
+      if(doChords && ln.chords){
+        for(const c of ln.chords){
+          if(o.whole){
+            const eq = o.caseSensitive ? (c.chord === o.find) : (c.chord.toLowerCase() === o.find.toLowerCase());
+            if(eq){ count++; if(apply) c.chord = o.repl; }
+          } else {
+            const spans = matchSpans(re, c.chord);
+            count += spans.length;
+            if(apply && spans.length) c.chord = c.chord.replace(re, o.repl);
+          }
+        }
+      }
+    }
+  }
+  return count;
+}
+function updateFindCount(){
+  const el = document.getElementById('findCount');
+  if(!el) return;
+  if(!document.getElementById('findInput').value){ el.textContent = ''; return; }
+  const n = runReplace(false);
+  el.textContent = n ? `${n} match${n===1?'':'es'}` : 'No matches';
+}
+function doReplaceAll(){
+  const o = findOpts();
+  if(!o.find){ toast('Enter something to find'); return; }
+  const n = runReplace(false);
+  if(!n){ toast('No matches'); updateFindCount(); return; }
+  pushHistory();
+  runReplace(true);
+  renderEditor();
+  updateUndoButtons();
+  updateFindCount();
+  toast(`Replaced ${n} match${n===1?'':'es'}`);
+}
 
 /* ============================================================
    PROJECTS modal — open / switch / new / rename / duplicate / delete

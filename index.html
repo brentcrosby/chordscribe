@@ -25,6 +25,7 @@
         <button id="viewEditor" class="active" onclick="setView('editor')">Editor</button>
         <button id="viewSource" onclick="setView('source')">ChordPro</button>
       </div>
+      <button onclick="openFind()" title="Find &amp; replace (Ctrl/Cmd+F)">⌕ Find</button>
       <button onclick="openHelp()" title="Help">? Help</button>
       <button onclick="openExport()" class="primary">Export</button>
     </div>
@@ -105,7 +106,7 @@
   </div>
 
   <div class="hint" id="hintEditor">
-    <b>Editor</b> — type lyrics like a normal text editor: Enter starts a new line, and you can select, cut, copy &amp; paste across lines. Hover a word and click the <b>+</b> above it to add a chord (click a chord to change it). Type a name like <b>Chorus</b> or <b>Verse 2</b> on its own line to make a section.
+    <b>Editor</b> — type lyrics like a normal text editor: Enter starts a new line, and you can select, cut, copy &amp; paste across lines. Hover a word and click the <b>+</b> above it to add a chord (click a chord to change it). Shift-click several chords and type a new one + <b>Enter</b> to change them all at once. Type a name like <b>Chorus</b> or <b>Verse 2</b> on its own line to make a section.
   </div>
   <div class="hint" id="hintSource" style="display:none">
     <b>ChordPro</b> — edit the raw source directly. Put chords inline in brackets like <b>[D]</b> before the word they land on, and mark sections with <b>{comment: Verse 1}</b>. Changes sync back to the Editor view.
@@ -136,6 +137,8 @@
       <ul>
         <li>Type lyrics like a normal text editor — <b>Enter</b> starts a new line, and you can select, cut, copy &amp; paste across lines.</li>
         <li>Hover a word and click the <b>+</b> above it to add a chord. Click an existing chord to change it, or drag it to move it.</li>
+        <li>Shift-click (or drag a box around) several chords to select them, then just type a chord and press <b>Enter</b> to set them all to that chord at once.</li>
+        <li>Use <b>Find &amp; Replace</b> (<b>Ctrl/Cmd + F</b>) to swap text and/or chords across the whole song — e.g. change every <b>Cmaj7</b> to <b>C</b>.</li>
         <li>Type a name like <b>Chorus</b> or <b>Verse 2</b> on its own line to turn it into a section heading.</li>
       </ul>
       <h4>ChordPro view</h4>
@@ -226,6 +229,42 @@
     </div>
     <div class="mbody">
       <div class="projectlist" id="projectList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Find & Replace modal -->
+<div class="modal-bg" id="findBg">
+  <div class="modal modal-narrow">
+    <div class="mhead">
+      <h3>Find &amp; Replace</h3>
+      <button onclick="closeFind()">Close</button>
+    </div>
+    <div class="mbody find-body">
+      <label class="find-row">
+        <span>Find</span>
+        <input id="findInput" type="text" spellcheck="false" placeholder="text or chord to find">
+      </label>
+      <label class="find-row">
+        <span>Replace</span>
+        <input id="replaceInput" type="text" spellcheck="false" placeholder="replace with…">
+      </label>
+      <div class="find-row">
+        <span>Search in</span>
+        <div class="colswitch" id="findScope">
+          <button class="active" data-scope="both" onclick="setFindScope('both')">Both</button>
+          <button data-scope="lyrics" onclick="setFindScope('lyrics')">Lyrics</button>
+          <button data-scope="chords" onclick="setFindScope('chords')">Chords</button>
+        </div>
+      </div>
+      <div class="find-opts">
+        <label><input type="checkbox" id="findCase"> Match case</label>
+        <label><input type="checkbox" id="findWhole"> Whole word / chord</label>
+      </div>
+      <div class="addrow find-actions">
+        <span class="find-count" id="findCount"></span>
+        <button class="primary" onclick="doReplaceAll()">Replace All</button>
+      </div>
     </div>
   </div>
 </div>

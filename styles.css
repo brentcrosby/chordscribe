@@ -580,6 +580,32 @@
   .colswitch button.active { background: var(--ink); color: var(--parchment); }
   .colswitch button:not(.active):hover { background: var(--parchment-deep); }
 
+  /* Find & Replace modal */
+  .find-body { display: flex; flex-direction: column; gap: 14px; }
+  .find-row { display: flex; align-items: center; gap: 12px; }
+  .find-row > span {
+    flex: 0 0 80px; text-align: right;
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .find-row input[type=text] {
+    flex: 1; padding: 8px 10px; font-size: 15px;
+    border: 1.5px solid var(--parchment-edge); border-radius: 4px;
+    background: var(--parchment); color: var(--ink);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .find-row input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .find-opts { display: flex; gap: 22px; padding-left: 92px; }
+  .find-opts label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--ink-soft); cursor: pointer;
+  }
+  .find-actions { align-items: center; justify-content: flex-end; }
+  .find-count {
+    margin-right: auto; font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px; color: var(--ink-soft);
+  }
+
   pre.rawout {
     background: #1c1410; color: #e9dcc0; padding: 16px; border-radius: 4px;
     font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.55;
