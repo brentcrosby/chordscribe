@@ -18,6 +18,7 @@
       <span class="sub">ChordPro&nbsp;Editor</span>
     </div>
     <div class="toolbar">
+      <button onclick="openProjects()" title="Saved projects">☰ Projects</button>
       <label class="filelabel" for="fileinput">Import .txt / .pro / .pdf</label>
       <input id="fileinput" type="file" accept=".txt,.pro,.chordpro,.crd,.pdf,application/pdf" style="display:none">
       <div class="modeswitch">
@@ -209,6 +210,22 @@
           <button onclick="copySource()">Copy to clipboard</button>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Projects modal -->
+<div class="modal-bg" id="projectsBg">
+  <div class="modal modal-narrow">
+    <div class="mhead">
+      <h3>Projects</h3>
+      <div>
+        <button class="primary" onclick="newProject()">+ New</button>
+        <button onclick="closeProjects()">Close</button>
+      </div>
+    </div>
+    <div class="mbody">
+      <div class="projectlist" id="projectList"></div>
     </div>
   </div>
 </div>

@@ -38,25 +38,96 @@ let typingTimer = null;
 function snapshot(){ return JSON.stringify(song); }
 function restore(s){ song = JSON.parse(s); }
 
-/* ---------- local autosave (survives reloads) ---------- */
-const SAVE_KEY = 'chordscribe:song';
+/* ============================================================
+   PROJECT LIBRARY (multiple songs saved in-browser)
+   - chordscribe:index      → [{id, title, updatedAt}]  (lightweight list)
+   - chordscribe:proj:<id>   → the full song object for one project
+   - chordscribe:current     → id of the project currently open
+   The currently-open project IS the global `song`; edits autosave into
+   its own slot (saveLocal, below), so switching projects never clobbers.
+   ============================================================ */
+const IDX_KEY    = 'chordscribe:index';
+const PROJ_KEY   = id => 'chordscribe:proj:' + id;
+const CUR_KEY    = 'chordscribe:current';
+const LEGACY_KEY = 'chordscribe:song';     // pre-library single autosave slot
+let currentProjectId = null;
 let saveTimer = null;
-function saveLocal(){
-  if(saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {       // debounced so typing doesn't hammer storage
-    saveTimer = null;
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify(song)); }
-    catch(e){ /* quota exceeded / private mode — fail silently */ }
-  }, 400);
+
+function uid(){ return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function projectTitle(s){ return ((s && s.meta && s.meta.title) || '').trim() || 'Untitled'; }
+
+function readIndex(){
+  try { const a = JSON.parse(localStorage.getItem(IDX_KEY)); return Array.isArray(a) ? a : []; }
+  catch(e){ return []; }
 }
-function loadLocal(){
+function writeIndex(idx){ try { localStorage.setItem(IDX_KEY, JSON.stringify(idx)); } catch(e){} }
+
+function loadProjectSong(id){
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = localStorage.getItem(PROJ_KEY(id));
     if(!raw) return null;
     const s = JSON.parse(raw);
     if(s && Array.isArray(s.lines) && s.meta) return s;   // sanity-check shape
   } catch(e){}
   return null;
+}
+
+// Persist a song into a project slot and refresh its index entry (title + time).
+function writeProject(id, s){
+  try {
+    localStorage.setItem(PROJ_KEY(id), JSON.stringify(s));
+    const idx = readIndex();
+    const entry = idx.find(p => p.id === id);
+    const now = Date.now();
+    if(entry){ entry.title = projectTitle(s); entry.updatedAt = now; }
+    else idx.push({ id, title: projectTitle(s), updatedAt: now });
+    writeIndex(idx);
+  } catch(e){ /* quota exceeded / private mode — fail silently */ }
+}
+
+// debounced autosave of the open project (called from history pushes)
+function saveLocal(){
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {       // debounced so typing doesn't hammer storage
+    saveTimer = null;
+    if(currentProjectId) writeProject(currentProjectId, song);
+  }, 400);
+}
+// flush any pending debounced save immediately (before switching projects)
+function flushSave(){
+  if(saveTimer){ clearTimeout(saveTimer); saveTimer = null; }
+  if(currentProjectId) writeProject(currentProjectId, song);
+}
+
+function setCurrentProject(id){
+  currentProjectId = id;
+  try { localStorage.setItem(CUR_KEY, id); } catch(e){}
+}
+
+// Decide which song to show at startup: migrate the old single slot if present,
+// else open the last-open (or most recent) project, else fall back to the sample.
+function bootProjects(){
+  let idx = readIndex();
+  if(idx.length === 0){
+    let migrated = null;
+    try {
+      const raw = localStorage.getItem(LEGACY_KEY);
+      if(raw){ const s = JSON.parse(raw); if(s && Array.isArray(s.lines) && s.meta) migrated = s; }
+    } catch(e){}
+    const first = migrated || parseChordPro(SAMPLE);
+    const id = uid();
+    setCurrentProject(id);
+    writeProject(id, first);
+    try { localStorage.removeItem(LEGACY_KEY); } catch(e){}
+    return first;
+  }
+  let cur = null;
+  try { cur = localStorage.getItem(CUR_KEY); } catch(e){}
+  if(!cur || !idx.find(p => p.id === cur)){
+    cur = idx.slice().sort((a,b) => b.updatedAt - a.updatedAt)[0].id;
+  }
+  setCurrentProject(cur);
+  return loadProjectSong(cur) || parseChordPro(SAMPLE);
 }
 
 function pushHistory(){
@@ -1961,10 +2032,7 @@ document.getElementById('fileinput').addEventListener('change', e => {
     reader.onload = async ev => {
       try {
         const parsed = await importPdf(ev.target.result);
-        pushHistory();
-        song = parsed;
-        render();
-        toast('Imported '+f.name);
+        adoptAsNewProject(parsed, 'Imported '+f.name);
       } catch(err){
         console.error(err);
         toast(err && err.message ? 'PDF: '+err.message : 'Could not read that PDF');
@@ -1973,10 +2041,7 @@ document.getElementById('fileinput').addEventListener('change', e => {
     reader.readAsArrayBuffer(f);
   } else {
     reader.onload = ev => {
-      pushHistory();
-      song = parseChordPro(ev.target.result);
-      render();
-      toast('Imported '+f.name);
+      adoptAsNewProject(parseChordPro(ev.target.result), 'Imported '+f.name);
     };
     reader.readAsText(f);
   }
@@ -1999,7 +2064,144 @@ document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id
 function openHelp(){ document.getElementById('helpBg').classList.add('show'); }
 function closeHelp(){ document.getElementById('helpBg').classList.remove('show'); }
 document.getElementById('helpBg').addEventListener('click', e=>{ if(e.target.id==='helpBg') closeHelp(); });
-document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeHelp(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeHelp(); closeProjects(); } });
+
+/* ============================================================
+   PROJECTS modal — open / switch / new / rename / duplicate / delete
+   ============================================================ */
+function openProjects(){
+  flushSave();                         // make sure the open song's latest edits are stored
+  renderProjectList();
+  document.getElementById('projectsBg').classList.add('show');
+}
+function closeProjects(){ document.getElementById('projectsBg').classList.remove('show'); }
+document.getElementById('projectsBg').addEventListener('click', e=>{ if(e.target.id==='projectsBg') closeProjects(); });
+
+function fmtDate(ts){
+  try {
+    const d = new Date(ts);
+    return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
+  } catch(e){ return ''; }
+}
+
+// Swap a parsed/blank song in as a brand-new project and open it.
+function adoptAsNewProject(s, msg){
+  flushSave();
+  const id = uid();
+  setCurrentProject(id);
+  song = s;
+  writeProject(id, song);
+  undoStack = []; redoStack = [];
+  render();
+  if(msg) toast(msg);
+}
+
+function newProject(){
+  adoptAsNewProject({ meta:{}, lines:[] }, 'New project');
+  renderProjectList();
+}
+
+function openProject(id){
+  if(id === currentProjectId){ closeProjects(); return; }
+  flushSave();                         // store the project we're leaving
+  const s = loadProjectSong(id);
+  if(!s){ toast('Could not open that project'); return; }
+  setCurrentProject(id);
+  song = s;
+  undoStack = []; redoStack = [];
+  render();
+  closeProjects();
+  toast('Opened “' + projectTitle(song) + '”');
+}
+
+function renameProject(id){
+  const idx = readIndex();
+  const entry = idx.find(p => p.id === id);
+  const name = prompt('Rename project', entry ? entry.title : '');
+  if(name === null) return;
+  const title = name.trim() || 'Untitled';
+  if(id === currentProjectId){
+    song.meta = song.meta || {};
+    song.meta.title = title;
+    writeProject(id, song);
+    render();                          // reflect new title in the meta bar
+  } else {
+    const s = loadProjectSong(id);
+    if(s){ s.meta = s.meta || {}; s.meta.title = title; writeProject(id, s); }
+  }
+  renderProjectList();
+}
+
+function duplicateProject(id){
+  const s = (id === currentProjectId) ? song : loadProjectSong(id);
+  if(!s) return;
+  const copy = JSON.parse(JSON.stringify(s));
+  copy.meta = copy.meta || {};
+  copy.meta.title = projectTitle(s) + ' copy';
+  writeProject(uid(), copy);
+  renderProjectList();
+  toast('Duplicated');
+}
+
+function deleteProject(id){
+  const idx = readIndex();
+  const entry = idx.find(p => p.id === id);
+  if(!confirm('Delete “' + (entry ? entry.title : 'project') + '”? This can’t be undone.')) return;
+  try { localStorage.removeItem(PROJ_KEY(id)); } catch(e){}
+  const next = idx.filter(p => p.id !== id);
+  writeIndex(next);
+  if(id === currentProjectId){
+    if(next.length === 0){
+      adoptAsNewProject({ meta:{}, lines:[] });   // never leave the editor without a project
+    } else {
+      const pick = next.slice().sort((a,b) => b.updatedAt - a.updatedAt)[0].id;
+      setCurrentProject(pick);
+      song = loadProjectSong(pick) || { meta:{}, lines:[] };
+      undoStack = []; redoStack = [];
+      render();
+    }
+  }
+  renderProjectList();
+}
+
+function renderProjectList(){
+  const wrap = document.getElementById('projectList');
+  if(!wrap) return;
+  const idx = readIndex().slice().sort((a,b) => b.updatedAt - a.updatedAt);
+  wrap.innerHTML = '';
+  if(idx.length === 0){ wrap.innerHTML = '<div class="pl-empty">No saved projects yet.</div>'; return; }
+  idx.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'pl-row' + (p.id === currentProjectId ? ' current' : '');
+
+    const name = document.createElement('button');
+    name.className = 'pl-name';
+    name.textContent = p.title || 'Untitled';
+    name.title = 'Open';
+    name.onclick = () => openProject(p.id);
+
+    const date = document.createElement('span');
+    date.className = 'pl-date';
+    date.textContent = fmtDate(p.updatedAt);
+
+    const actions = document.createElement('span');
+    actions.className = 'pl-actions';
+    const mk = (label, fn) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.onclick = e => { e.stopPropagation(); fn(p.id); };
+      return b;
+    };
+    actions.appendChild(mk('Rename', renameProject));
+    actions.appendChild(mk('Duplicate', duplicateProject));
+    actions.appendChild(mk('Delete', deleteProject));
+
+    row.appendChild(name);
+    row.appendChild(date);
+    row.appendChild(actions);
+    wrap.appendChild(row);
+  });
+}
 
 function exportTab(which){
   document.getElementById('tabRendered').classList.toggle('active', which==='rendered');
@@ -2680,6 +2882,6 @@ That [D]Thou     my [G]God      shouldst [A]die     for [D]me`;
 
 restoreFontSettings();
 applyFont();
-song = loadLocal() || parseChordPro(SAMPLE);
+song = bootProjects();
 render();
 if(document.fonts && document.fonts.ready){ document.fonts.ready.then(positionChords); }
