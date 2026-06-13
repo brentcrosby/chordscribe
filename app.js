@@ -613,6 +613,97 @@ function pasteChords(lineEl){
   return true;
 }
 
+/* ---- copy / place chord ROWS across sections (chords only, no lyrics) ----
+   Use case: verse 1 has nicely formatted chords you want to reuse on verse 2,
+   whose words don't line up. Each selected lyric line's chords are stored
+   anchored to a WORD (which word, and how far into it) rather than an absolute
+   column, so they can be re-snapped onto another set of lines and then cleaned
+   up by hand. Separate from chordClip (the column-exact, lyrics-free in-app
+   clipboard used by Cmd+C/V on free-placed lines). */
+let chordRowClip = null;
+
+/* Start/end column of every run of non-space characters (a "word"). */
+function wordSpans(text){
+  const spans = []; const re = /\S+/g; let m;
+  while((m = re.exec(text))) spans.push({ start: m.index, end: m.index + m[0].length });
+  return spans;
+}
+/* Anchor an absolute chord offset to the nearest word: { wi, within }, where
+   `within` is the offset into that word (negative = sits in the gap before it).
+   Offsets past the last word anchor to the line end (wi = -1). */
+function anchorChord(off, spans, textLen){
+  let wi = spans.findIndex(s => off >= s.start && off < s.end);
+  if(wi >= 0) return { wi, within: off - spans[wi].start };
+  wi = spans.findIndex(s => s.start > off);            // first word after the gap
+  if(wi >= 0) return { wi, within: off - spans[wi].start };   // within < 0
+  return { wi: -1, within: off - textLen };            // trailing: end-anchored
+}
+/* Resolve a word anchor back to a column on a target line's words. */
+function resolveAnchor(a, spans, textLen){
+  if(a.wi < 0) return Math.max(0, Math.min(textLen + a.within, textLen));   // end-anchored
+  if(a.wi >= spans.length) return textLen;             // fewer words here: park at the end
+  const s = spans[a.wi];
+  let off = s.start + a.within;
+  if(a.within >= 0) off = Math.min(off, s.end);        // keep it on (or just past) the word
+  return Math.max(0, Math.min(off, textLen));
+}
+
+/* Copy the chord pattern from the highlighted lyric lines (no lyrics). One row
+   per non-blank lyric line so line N maps to line N when placed. */
+function copyChordRows(){
+  const pos = currentPos();
+  if(!pos) return false;
+  const rows = [];
+  for(let i=pos.sL; i<=pos.eL; i++){
+    const ln = song.lines[i];
+    if(ln.type !== 'lyric' || isBlank(ln)) continue;
+    const spans = wordSpans(ln.text || '');
+    rows.push((ln.chords || []).map(c => {
+      const a = anchorChord(c.off, spans, (ln.text||'').length);
+      return { wi: a.wi, within: a.within, chord: c.chord };
+    }));
+  }
+  if(!rows.length){ toast('Select lines with chords first'); return false; }
+  chordRowClip = rows;
+  toast('Copied chords from ' + rows.length + ' line' + (rows.length>1?'s':''));
+  return true;
+}
+
+/* Snap the copied chord rows onto the highlighted lines, approximating word
+   positions. Overwrites each target line's chords so the pattern lands clean. */
+function placeChordRows(){
+  if(!chordRowClip || !chordRowClip.length){ toast('Copy chords from a section first'); return; }
+  const pos = currentPos();
+  if(!pos) return;
+  const targets = [];
+  for(let i=pos.sL; i<=pos.eL; i++){
+    const ln = song.lines[i];
+    if(ln.type === 'lyric' && !isBlank(ln)) targets.push(ln);
+  }
+  if(!targets.length){ toast('Select the lines to place chords on'); return; }
+  pushHistory();                       // snapshot BEFORE mutating
+  const n = Math.min(targets.length, chordRowClip.length);
+  for(let k=0; k<n; k++){
+    const ln = targets[k];
+    const text = ln.text || '';
+    const spans = wordSpans(text);
+    const used = new Set();
+    const placed = [];
+    for(const a of chordRowClip[k]){
+      let off = resolveAnchor(a, spans, text.length);
+      while(used.has(off) && off < text.length) off++;   // don't stack two on one column
+      used.add(off);
+      placed.push({ off, chord: a.chord });
+    }
+    placed.sort((x,y)=>x.off-y.off);
+    ln.chords = placed;
+  }
+  renderEditor();
+  updateUndoButtons();
+  requestAnimationFrame(updateSelToolbar);
+  toast('Placed chords on ' + n + ' line' + (n>1?'s':''));
+}
+
 function positionChords(){
   chordLayer.innerHTML = '';
   for(const el of editor.children){
@@ -940,6 +1031,18 @@ function ensureSelToolbar(){
   modUp.addEventListener('mousedown', e => { e.preventDefault(); modulateSelection(1); });
   selToolbar.appendChild(modUp);
 
+  const copyCh = document.createElement('button');
+  copyCh.textContent = '⧉ Copy chords';
+  copyCh.title = 'Copy just the chord pattern from the highlighted lines (no lyrics)';
+  copyCh.addEventListener('mousedown', e => { e.preventDefault(); copyChordRows(); });
+  selToolbar.appendChild(copyCh);
+
+  const placeCh = document.createElement('button');
+  placeCh.textContent = '⤵ Place chords';
+  placeCh.title = 'Snap the copied chords onto these lines, approximating word positions';
+  placeCh.addEventListener('mousedown', e => { e.preventDefault(); placeChordRows(); });
+  selToolbar.appendChild(placeCh);
+
   document.body.appendChild(selToolbar);
 }
 function hideSelToolbar(){ if(selToolbar) selToolbar.classList.remove('show'); }
@@ -1053,7 +1156,9 @@ function openChordPop(anchorEl, lineEl, off, pad){
     const qr = document.createElement('div'); qr.className='quickrow';
     used.slice(0,12).forEach(c => {
       const b=document.createElement('span'); b.className='q'; b.textContent=c;
-      b.onclick = () => { inp.value=c; };
+      // Tapping a quick-chord confirms it outright — no need to hit Set.
+      b.onmousedown = e => e.preventDefault();
+      b.onclick = () => apply(c);
       qr.appendChild(b);
     });
     pop.appendChild(qr);
@@ -1094,8 +1199,10 @@ function openChordPop(anchorEl, lineEl, off, pad){
   pop.style.top = top+'px'; pop.style.left = left+'px';
   activePop = pop;
   inp.focus(); inp.select();
-  inp.onkeydown = e => {
-    if(e.key==='Enter'){ apply(inp.value.trim()); }
+  // Key handling lives on the whole popup, not just the input, so Enter/Esc
+  // work even when focus is on a quick-chord button or the Set/Remove buttons.
+  pop.onkeydown = e => {
+    if(e.key==='Enter'){ e.preventDefault(); apply(inp.value.trim()); }
     if(e.key==='Escape'){ closePop(); }
     // Del removes the chord outright and closes the editor.
     if(e.key==='Delete' && existing){
