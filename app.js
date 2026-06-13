@@ -244,6 +244,11 @@ function lineFromSegments(segs){
 function isBlank(ln){
   return ln.type==='lyric' && (ln.text||'').trim()==='' && (!ln.chords || ln.chords.length===0);
 }
+/* A chord-only (instrumental / intro) line: whitespace lyrics carrying chords.
+   Rendered as a compact chord row with no empty lyric line beneath it. */
+function isChordOnly(ln){
+  return ln.type==='lyric' && (ln.text||'').trim()==='' && ln.chords && ln.chords.length>0;
+}
 function visText(ln){ return ln.type==='section' ? ln.label : (ln.text||''); }
 function visLen(ln){ return visText(ln).length; }
 
@@ -525,10 +530,17 @@ notesInput.addEventListener('input', e => {
   autosizeNotes();
 });
 
+/* Class list for a .line element, reflecting its model type. */
+function lineClass(ln){
+  return 'line'
+    + (ln.type==='section' ? ' sec' : '')
+    + (isBlank(ln) ? ' blank' : '');
+}
+
 /* Build a single .line element for a model line. */
 function buildLineEl(ln){
   const el = document.createElement('div');
-  el.className = 'line' + (ln.type==='section' ? ' sec' : '') + (isBlank(ln) ? ' blank' : '');
+  el.className = lineClass(ln);
   const text = visText(ln);
   if(text === '') el.appendChild(document.createElement('br'));
   else el.appendChild(document.createTextNode(text));
@@ -548,8 +560,7 @@ function renderEditor(){
 
 /* Refresh a single line element's class to match its (possibly changed) type. */
 function refreshClass(el){
-  const ln = el.__line;
-  el.className = 'line' + (ln.type==='section' ? ' sec' : '') + (isBlank(ln) ? ' blank' : '');
+  el.className = lineClass(el.__line);
 }
 
 /* ---- chord overlay placement ---- */
@@ -857,8 +868,13 @@ function setCaret(lineIndex, off){
   if(tn && tn.nodeType === 3) r.setStart(tn, Math.max(0, Math.min(off, tn.length)));
   else r.setStart(el, 0);
   r.collapse(true);
+  // Restoring the selection after a full re-render makes the browser scroll the
+  // caret into view, which yanks the edited line to the bottom of the viewport.
+  // Keep the page where the user left it.
+  const sx = window.scrollX, sy = window.scrollY;
   const sel = getSelection();
   sel.removeAllRanges(); sel.addRange(r);
+  window.scrollTo(sx, sy);
 }
 
 /* ---- keeping chord anchors glued to the text as it changes ---- */
@@ -2270,7 +2286,7 @@ function buildHeadEl(){
 }
 
 function buildRenderedLineEl(ln){
-  const wrap = document.createElement('div'); wrap.className='rline';
+  const wrap = document.createElement('div'); wrap.className='rline' + (isChordOnly(ln) ? ' chordonly' : '');
   const row = document.createElement('div'); row.className='rcells';
 
   const cells = [];
@@ -2694,6 +2710,7 @@ function buildPrintDocHTML(){
     ".rcell{ display:inline-flex; flex-direction:column; align-items:flex-start; }",
     ".rcellchord{ font-family:" + chordFont + "; font-size:" + chordSize + "px; font-weight:600; color:#000; line-height:1.05; white-space:pre; padding-right:0.4em; }",
     ".rcelltext{ font-family:" + lyricFont + "; font-size:" + lyricSize + "px; line-height:1.15; white-space:pre; color:#111; }",
+    ".rline.chordonly .rcelltext{ line-height:0; }",
     "@media screen { body{ background:#e9e9e9; } .psheet{ margin:16px auto; box-shadow:0 4px 16px rgba(0,0,0,.3); background:#fff; } }"
   ].join('\n');
 
@@ -2771,6 +2788,7 @@ function printRendered(){
     '#print-host .rcell{display:inline-flex;flex-direction:column;align-items:flex-start;}' +
     '#print-host .rcellchord{font-family:' + chordFont + ';font-size:' + chordSize + 'px;font-weight:600;color:#000;line-height:1.05;white-space:pre;padding-right:0.4em;}' +
     '#print-host .rcelltext{font-family:' + lyricFont + ';font-size:' + lyricSize + 'px;line-height:1.15;white-space:pre;color:#111;}' +
+    '#print-host .rline.chordonly .rcelltext{line-height:0;}' +
     '}';
   document.head.appendChild(pstyle);
   document.body.appendChild(host);

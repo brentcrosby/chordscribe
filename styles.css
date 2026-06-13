@@ -554,6 +554,11 @@
     font-family: var(--exp-lyric-font); font-size: var(--exp-lyric);
     line-height: 1.15; white-space: pre; color: #111;
   }
+  /* Chord-only lines keep their whitespace runs (they space the chords apart
+     horizontally) but the empty lyric line is collapsed to zero height, so an
+     instrumental row costs only the chord's height — no wasted lyric line that
+     would force columns to compact. */
+  .page-sheet .rline.chordonly .rcelltext { line-height: 0; }
 
   /* hidden measuring sheet — also carries .page-sheet so the scoped
      line/chord/lyric rules apply, but with zoom reset to 1 for true px. */
