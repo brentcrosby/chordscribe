@@ -549,6 +549,10 @@ function buildLineEl(ln){
 }
 
 function renderEditor(){
+  // Clearing innerHTML collapses the editor to its min-height; if the page is
+  // scrolled down the browser clamps the scroll position upward. Capture it
+  // before the wipe and restore once the content (and height) is back.
+  const sx = window.scrollX, sy = window.scrollY;
   editor.innerHTML = '';
   chordLayer.innerHTML = '';
   if(song.lines.length === 0){
@@ -556,6 +560,7 @@ function renderEditor(){
   }
   for(const ln of song.lines) editor.appendChild(buildLineEl(ln));
   positionChords();
+  window.scrollTo(sx, sy);
 }
 
 /* Refresh a single line element's class to match its (possibly changed) type. */
@@ -1694,8 +1699,12 @@ function setView(v){
 }
 
 function autosizeSource(){
+  // Setting height to 'auto' collapses the textarea for a beat, shrinking the
+  // page and making the browser clamp/jump the scroll position. Hold it steady.
+  const sx = window.scrollX, sy = window.scrollY;
   sourceEdit.style.height = 'auto';
   sourceEdit.style.height = Math.max(360, sourceEdit.scrollHeight) + 'px';
+  window.scrollTo(sx, sy);
 }
 
 /* Reparse the raw source into the model. Keeps meta from the source too. */
