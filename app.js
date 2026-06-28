@@ -1222,7 +1222,26 @@ function makeSectionFromSelection(){
    ============================================================ */
 let activePop = null;
 function closePop(){ if(activePop){ activePop.remove(); activePop = null; } }
-document.addEventListener('click', closePop);
+function commitPop(){
+  if(activePop && typeof activePop.__commit === 'function') activePop.__commit();
+  else closePop();
+}
+document.addEventListener('click', commitPop);
+
+function normalizeChordValue(val){
+  val = (val || '').trim();
+  return val.replace(/(^|\/)([a-g])/g, (_, prefix, note) => prefix + note.toUpperCase());
+}
+
+function autoCapChordInput(inp){
+  inp.addEventListener('input', () => {
+    const capped = normalizeChordValue(inp.value);
+    if(inp.value === capped) return;
+    const start = inp.selectionStart, end = inp.selectionEnd;
+    inp.value = capped;
+    if(start !== null && end !== null) inp.setSelectionRange(start, end);
+  });
+}
 
 function openChordPop(anchorEl, lineEl, off, pad){
   closePop();
@@ -1239,8 +1258,9 @@ function openChordPop(anchorEl, lineEl, off, pad){
   pop.appendChild(title);
 
   const inp = document.createElement('input');
-  inp.value = existing ? existing.chord : '';
+  inp.value = existing ? normalizeChordValue(existing.chord) : '';
   inp.placeholder = 'e.g. D, G, A7, D/F#';
+  autoCapChordInput(inp);
   pop.appendChild(inp);
 
   const used = collectChords();
@@ -1257,6 +1277,7 @@ function openChordPop(anchorEl, lineEl, off, pad){
   }
 
   const apply = val => {
+    val = normalizeChordValue(val);
     pushHistory();
     let padded = false;
     // Placing a chord past the end of an empty/instrumental line: pad with
@@ -1273,10 +1294,11 @@ function openChordPop(anchorEl, lineEl, off, pad){
     else positionChords();
     updateUndoButtons();
   };
+  pop.__commit = () => apply(inp.value);
 
   const btns = document.createElement('div'); btns.className='popbtns';
   const save = document.createElement('button'); save.textContent='Set'; save.className='primary';
-  save.onclick = () => apply(inp.value.trim());
+  save.onclick = () => apply(inp.value);
   const rm = document.createElement('button'); rm.textContent='Remove'; rm.className='rm';
   rm.disabled = !existing;
   rm.onclick = () => apply('');
@@ -1294,7 +1316,7 @@ function openChordPop(anchorEl, lineEl, off, pad){
   // Key handling lives on the whole popup, not just the input, so Enter/Esc
   // work even when focus is on a quick-chord button or the Set/Remove buttons.
   pop.onkeydown = e => {
-    if(e.key==='Enter'){ e.preventDefault(); apply(inp.value.trim()); }
+    if(e.key==='Enter'){ e.preventDefault(); apply(inp.value); }
     if(e.key==='Escape'){ closePop(); }
     // Del removes the chord outright and closes the editor.
     if(e.key==='Delete' && existing){
@@ -1608,6 +1630,7 @@ function shiftSelectedChords(delta){
 /* Set every selected chord to the same name (bulk relabel). Keeps the
    selection so you can immediately retype or nudge them. */
 function setSelectedChords(val){
+  val = normalizeChordValue(val);
   if(!chordSel.length || !val) return false;
   pushHistory();
   for(const s of chordSel) s.c.chord = val;
@@ -1635,11 +1658,13 @@ function openBulkChordPop(prefill){
   pop.appendChild(title);
 
   const inp = document.createElement('input');
-  inp.value = prefill || '';
+  inp.value = normalizeChordValue(prefill || '');
   inp.placeholder = 'e.g. D, G, A7, D/F#';
+  autoCapChordInput(inp);
   pop.appendChild(inp);
 
   const apply = val => { setSelectedChords(val); closePop(); };
+  pop.__commit = () => apply(inp.value);
 
   const used = collectChords();
   if(used.length){
@@ -1655,7 +1680,7 @@ function openBulkChordPop(prefill){
 
   const btns = document.createElement('div'); btns.className='popbtns';
   const save = document.createElement('button'); save.textContent='Set'; save.className='primary';
-  save.onclick = () => apply(inp.value.trim());
+  save.onclick = () => apply(inp.value);
   btns.appendChild(save);
   pop.appendChild(btns);
 
@@ -1671,7 +1696,7 @@ function openBulkChordPop(prefill){
   if(prefill){ const v = inp.value; inp.setSelectionRange(v.length, v.length); }
   else inp.select();
   pop.onkeydown = e => {
-    if(e.key==='Enter'){ e.preventDefault(); apply(inp.value.trim()); }
+    if(e.key==='Enter'){ e.preventDefault(); apply(inp.value); }
     if(e.key==='Escape'){ closePop(); }
   };
 }
