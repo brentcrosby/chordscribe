@@ -1067,6 +1067,13 @@ editor.addEventListener('cut', e => {
 });
 
 editor.addEventListener('paste', e => {
+  const imageFile = clipboardImageFile(e.clipboardData || window.clipboardData);
+  if(imageFile){
+    e.preventDefault();
+    e.stopPropagation();
+    importImageFile(imageFile, 'Imported pasted image');
+    return;
+  }
   e.preventDefault();
   const t = ((e.clipboardData || window.clipboardData).getData('text/plain') || '')
     .replace(/\r\n/g,'\n').replace(/\r/g,'\n');
@@ -2161,14 +2168,142 @@ async function importPdf(arrayBuffer){
 }
 
 /* ============================================================
+   IMAGE IMPORT — OCR screenshots/photos of chords over lyrics
+   ------------------------------------------------------------
+   Tesseract gives us words with bounding boxes. We reshape those boxes into
+   the same lightweight positioned-text items used by the PDF importer, then
+   reuse the row pairing logic above: a chord row paired with the lyric row
+   just below it becomes one model line with anchored chords.
+   ============================================================ */
+function imageDims(file){
+  if(window.createImageBitmap){
+    return createImageBitmap(file).then(bmp => {
+      const dims = { width: bmp.width, height: bmp.height };
+      if(bmp.close) bmp.close();
+      return dims;
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const dims = { width: img.naturalWidth || img.width, height: img.naturalHeight || img.height };
+      URL.revokeObjectURL(url);
+      resolve(dims);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image')); };
+    img.src = url;
+  });
+}
+
+function ocrBoxItems(entries, imageHeight){
+  return (entries || []).map(w => {
+    const text = (w.text || w.symbols?.map(s => s.text).join('') || '').trim();
+    const b = w.bbox || {};
+    const x0 = Number(b.x0), x1 = Number(b.x1), y0 = Number(b.y0), y1 = Number(b.y1);
+    if(!text || !Number.isFinite(x0) || !Number.isFinite(x1) || !Number.isFinite(y0) || !Number.isFinite(y1)) return null;
+    if(w.confidence !== undefined && w.confidence < 20) return null;
+    return {
+      str: text,
+      x: x0,
+      // PDF y grows upward. OCR y grows downward, so invert it before row grouping.
+      y: imageHeight - ((y0 + y1) / 2),
+      w: Math.max(1, x1 - x0),
+      h: Math.max(1, y1 - y0)
+    };
+  }).filter(Boolean);
+}
+
+function importPositionedItems(items, pageW, meta){
+  const lines = [];
+  if(!items.length) return { meta: meta || {}, lines };
+
+  const heights = items.map(i=>i.h).sort((a,b)=>a-b);
+  const medH = heights[Math.floor(heights.length/2)] || 12;
+  const spaceW = pdfSpaceWidth(items);
+
+  const seps = pdfColumnSeps(items, pageW || Math.max(...items.map(i => i.x + i.w)));
+  const cols = [];
+  for(const it of items){
+    const ci = pdfColumnOf(it.x + it.w/2, seps);
+    (cols[ci] = cols[ci] || []).push(it);
+  }
+  for(const colItems of cols){
+    if(!colItems || !colItems.length) continue;
+    const rows = pdfClusterRows(colItems, medH*0.6);
+    pdfRowsToLines(rows, spaceW, lines);
+  }
+  while(lines.length && isBlank(lines[0])) lines.shift();
+  while(lines.length && isBlank(lines[lines.length-1])) lines.pop();
+  return { meta: meta || {}, lines };
+}
+
+let lastOcrToast = 0;
+function ocrLogger(m){
+  if(!m || m.status !== 'recognizing text') return;
+  const now = Date.now();
+  if(now - lastOcrToast < 900 && m.progress < 1) return;
+  lastOcrToast = now;
+  const pct = Math.max(1, Math.round((m.progress || 0) * 100));
+  toast('Reading image ' + pct + '%');
+}
+
+async function importImage(file){
+  if(!window.Tesseract) throw new Error('Image OCR support failed to load');
+  lastOcrToast = 0;
+  const dims = await imageDims(file);
+  const result = await Tesseract.recognize(file, 'eng', { logger: ocrLogger });
+  const data = result && result.data ? result.data : {};
+  let items = ocrBoxItems(data.words, dims.height);
+  if(!items.length) items = ocrBoxItems(data.lines, dims.height);
+  if(items.length){
+    const parsed = importPositionedItems(items, dims.width, {});
+    if(parsed.lines.length) return parsed;
+  }
+  if(data.text && data.text.trim()){
+    return parseChordPro(data.text);
+  }
+  throw new Error('No readable text found in that image');
+}
+
+function isImageFile(f){
+  return !!f && (/^image\//i.test(f.type || '') || /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(f.name || ''));
+}
+
+async function importImageFile(f, label){
+  try {
+    toast('Reading image...');
+    const parsed = await importImage(f);
+    adoptAsNewProject(parsed, label || 'Imported image');
+  } catch(err){
+    console.error(err);
+    toast(err && err.message ? 'Image: '+err.message : 'Could not read that image');
+  }
+}
+
+function clipboardImageFile(data){
+  if(!data || !data.items) return null;
+  for(const item of data.items){
+    if(item.kind === 'file' && /^image\//i.test(item.type || '')){
+      const f = item.getAsFile();
+      if(f) return f;
+    }
+  }
+  return null;
+}
+
+/* ============================================================
    IMPORT
    ============================================================ */
 document.getElementById('fileinput').addEventListener('change', e => {
   const f = e.target.files[0]; if(!f) return;
   const isPdf = /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
+  const isImg = isImageFile(f);
   const reader = new FileReader();
 
-  if(isPdf){
+  if(isImg){
+    importImageFile(f, 'Imported '+f.name);
+  } else if(isPdf){
     reader.onload = async ev => {
       try {
         const parsed = await importPdf(ev.target.result);
@@ -2186,6 +2321,14 @@ document.getElementById('fileinput').addEventListener('change', e => {
     reader.readAsText(f);
   }
   e.target.value = '';   // allow re-importing the same file
+});
+
+document.addEventListener('paste', e => {
+  if(e.defaultPrevented) return;
+  const f = clipboardImageFile(e.clipboardData || window.clipboardData);
+  if(!f) return;
+  e.preventDefault();
+  importImageFile(f, 'Imported pasted image');
 });
 
 /* ============================================================
