@@ -941,7 +941,7 @@ function spliceFragments(sL, sOff, eL, eOff, frags){
   const prefix = visText(startLn).slice(0, sOff);
   const suffix = visText(endLn).slice(eOff);
   const prefixChords = (startLn.type==='lyric' ? startLn.chords : [])
-    .filter(c => c.off <= sOff).map(c => ({off: Math.min(c.off, sOff), chord: c.chord}));
+    .filter(c => c.off < sOff).map(c => ({off: c.off, chord: c.chord}));
   const suffixChords = (endLn.type==='lyric' ? endLn.chords : [])
     .filter(c => c.off >= eOff).map(c => ({off: c.off - eOff, chord: c.chord}));
 
