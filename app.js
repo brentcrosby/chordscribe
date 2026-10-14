@@ -1847,7 +1847,7 @@ sourceEdit.addEventListener('input', () => {
 });
 
 /* ============================================================
-   PDF IMPORT  —  read back a sheet that ChordScribe printed
+   PDF IMPORT — positioned text, with OCR for scanned chord sheets
    ------------------------------------------------------------
    The renderer prints every line as a row of "cells", each cell a
    chord stacked directly above its slice of lyric, all left-aligned.
@@ -1857,8 +1857,8 @@ sourceEdit.addEventListener('input', () => {
    the same x as the lyric slice they belong to, a chord's character
    offset is just the length of the lyric to its left.
 
-   This is a best-effort reverse of the renderer, not a general PDF
-   reader: it assumes the chords-over-words layout this app produces.
+   Image-only pages are rendered locally and read with OCR. Both paths
+   assume a chords-over-words layout and preserve newspaper columns.
    ============================================================ */
 const PDFJS_VER = '3.11.174';
 /* A bare chord token: root, optional accidental, quality, extension, slash bass. */
@@ -1950,7 +1950,7 @@ function pdfChordTokens(items){
   const toks = [];
   const re = /\S+/g; let m;
   while((m = re.exec(text)) !== null){
-    toks.push({ chord: m[0], x: charX[m.index] });
+    if(pdfIsChordTok(m[0])) toks.push({ chord: m[0], x: charX[m.index] });
   }
   return toks;
 }
@@ -2014,12 +2014,18 @@ function pdfColumnSeps(items, pageW){
   const minX = Math.min(...items.map(i=>i.x));
   const maxX = Math.max(...items.map(i=>i.x + i.w));
   const seps = [];
+  const hasText = group => group.some(it => it.str.trim().split(/\s+/).some(t => !pdfIsChordTok(t)));
   let run = 0;
   for(let i=0;i<=W;i++){
     if(i < W && !filled[i]){ run++; continue; }
     if(run >= 14){
       const start = i - run, mid = start + run/2;
-      if(start > minX + 8 && i < maxX - 8) seps.push(mid);
+      if(start > minX + 8 && i < maxX - 8){
+        // Space between isolated instrumental chords is not a newspaper
+        // gutter. Require headings/lyrics on both sides of a column split.
+        if(hasText(items.filter(it => it.x + it.w < mid)) &&
+           hasText(items.filter(it => it.x > mid))) seps.push(mid);
+      }
     }
     run = 0;
   }
@@ -2084,71 +2090,106 @@ async function importPdf(arrayBuffer){
   const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const meta = {};
   const lines = [];
+  let worker = null;
+  let ocrPage = 0;
 
-  for(let p=1; p<=pdf.numPages; p++){
-    const page = await pdf.getPage(p);
-    const vp = page.getViewport({ scale:1 });
-    const tc = await page.getTextContent();
-    const items = tc.items
-      .filter(it => it.str && it.str.trim() !== '')
-      .map(it => ({
-        str: it.str,
-        x: it.transform[4],
-        y: it.transform[5],
-        w: it.width,
-        h: it.height || Math.abs(it.transform[3]) || 10
-      }));
-    if(!items.length) continue;
-
-    const heights = items.map(i=>i.h).sort((a,b)=>a-b);
-    const medH = heights[Math.floor(heights.length/2)] || 12;
-    const spaceW = pdfSpaceWidth(items);
-
-    // ---- header (page 1 only): everything above the first section / chord row ----
-    let bodyItems = items;
-    if(p === 1){
-      const fullRows = pdfClusterRows(items, medH*0.5);
-      const headerRows = [];
-      let split = 0;
-      for(; split<fullRows.length; split++){
-        const r = fullRows[split];
-        if(pdfRowHasBody(r)) break;
-        headerRows.push(r);
-      }
-      if(headerRows.length){
-        // Title = the tallest text on the page; key/tempo/time = the "Key - ..." row.
-        let titleItem = null;
-        for(const r of headerRows) for(const it of r.items){
-          if(!titleItem || it.h > titleItem.h) titleItem = it;
+  try {
+    for(let p=1; p<=pdf.numPages; p++){
+      const page = await pdf.getPage(p);
+      const vp = page.getViewport({ scale:1 });
+      const tc = await page.getTextContent();
+      let items = tc.items
+        .filter(it => it.str && it.str.trim() !== '')
+        .map(it => ({
+          str: it.str,
+          x: it.transform[4],
+          y: it.transform[5],
+          w: it.width,
+          h: it.height || Math.abs(it.transform[3]) || 10
+        }));
+      // A scanned sheet may still have a text header or page number. Those
+      // aren't enough: fall back when the text layer has no chord rows.
+      const nativeSpaceW = pdfSpaceWidth(items);
+      if(!pdfClusterRows(items, nativeSpaceW).some(pdfRowIsChords)){
+        if(!window.Tesseract) throw new Error('PDF OCR support failed to load');
+        ocrPage = p;
+        lastOcrToast = 0;
+        toast('Reading PDF page '+p+' of '+pdf.numPages+'...');
+        if(!worker){
+          worker = await Tesseract.createWorker('eng', 1, {
+            logger: m => ocrLogger(m, 'Reading PDF page '+ocrPage+' of '+pdf.numPages)
+          });
         }
-        const titleH = titleItem ? titleItem.h : 0;
-        const artistBits = [];
-        for(const r of headerRows){
-          const t = pdfRowText(r);
-          if(!t) continue;
-          if(/key\s*[-–:]/i.test(t) || /\b(tempo|time)\s*[-–:]/i.test(t)){ pdfParseKeyline(t, meta); continue; }
-          if(titleItem && r.items.some(it => it.h >= titleH - 0.5)){ if(!meta.title) meta.title = t; continue; }
-          artistBits.push(t);
+        items = await pdfOcrPageItems(page, worker);
+      }
+      // OCR splits "Page 1/2" into words. Remove the whole counter row so
+      // it cannot create a spurious column or become part of the lyrics.
+      const footerItems = new Set(pdfClusterRows(items, pdfSpaceWidth(items))
+        .filter(r => /^(?:page\s*)?\d+\s*\/\s*\d+$/i.test(pdfRowText(r)))
+        .flatMap(r => r.items));
+      items = items.filter(it => !footerItems.has(it));
+      if(!items.length) continue;
+
+      const heights = items.map(i=>i.h).sort((a,b)=>a-b);
+      const medH = heights[Math.floor(heights.length/2)] || 12;
+      const spaceW = pdfSpaceWidth(items);
+
+      // ---- header (page 1 only): everything above the first section / chord row ----
+      let bodyItems = items;
+      if(p === 1){
+        const fullRows = pdfClusterRows(items, medH*0.5);
+        const headerRows = [];
+        let split = 0;
+        for(; split<fullRows.length; split++){
+          const r = fullRows[split];
+          if(pdfRowHasBody(r)) break;
+          headerRows.push(r);
         }
-        if(artistBits.length && !meta.artist) meta.artist = artistBits[0];
-        const headerSet = new Set(headerRows.flatMap(r=>r.items));
-        bodyItems = items.filter(it => !headerSet.has(it));
+        if(headerRows.length){
+          // Title = the tallest text on the page; key/tempo/time = the "Key - ..." row.
+          let titleItem = null;
+          for(const r of headerRows) for(const it of r.items){
+            if(!titleItem || it.h > titleItem.h) titleItem = it;
+          }
+          const titleH = titleItem ? titleItem.h : 0;
+          const artistBits = [];
+          for(const r of headerRows){
+            const t = pdfRowText(r);
+            if(!t) continue;
+            if(/key\s*[-–:]/i.test(t) || /\b(tempo|time)\s*[-–:]/i.test(t)){ pdfParseKeyline(t, meta); continue; }
+            if(titleItem && r.items.some(it => it.h >= titleH - 0.5)){
+              if(!meta.title){
+                const by = t.match(/^(.+?)\s+Chords\s+by\s+(.+?)(?:\s+[>»]+)?$/i);
+                meta.title = by ? by[1] : t;
+                if(by) meta.artist = by[2];
+              }
+              continue;
+            }
+            artistBits.push(t);
+          }
+          if(artistBits.length && !meta.artist) meta.artist = artistBits[0];
+          const headerSet = new Set(headerRows.flatMap(r=>r.items));
+          bodyItems = items.filter(it => !headerSet.has(it));
+        }
+      }
+      if(!bodyItems.length) continue;
+
+      // ---- body: split into columns, read each column top-to-bottom, left-to-right ----
+      const seps = pdfColumnSeps(bodyItems, vp.width);
+      const cols = [];
+      for(const it of bodyItems){
+        const ci = pdfColumnOf(it.x + it.w/2, seps);
+        (cols[ci] = cols[ci] || []).push(it);
+      }
+      for(const colItems of cols){
+        if(!colItems || !colItems.length) continue;
+        const rows = pdfClusterRows(colItems, medH*0.5);
+        pdfRowsToLines(rows, spaceW, lines);
       }
     }
-    if(!bodyItems.length) continue;
-
-    // ---- body: split into columns, read each column top-to-bottom, left-to-right ----
-    const seps = pdfColumnSeps(bodyItems, vp.width);
-    const cols = [];
-    for(const it of bodyItems){
-      const ci = pdfColumnOf(it.x + it.w/2, seps);
-      (cols[ci] = cols[ci] || []).push(it);
-    }
-    for(const colItems of cols){
-      if(!colItems || !colItems.length) continue;
-      const rows = pdfClusterRows(colItems, medH*0.5);
-      pdfRowsToLines(rows, spaceW, lines);
-    }
+  } finally {
+    try { if(worker) await worker.terminate(); }
+    finally { await pdf.destroy(); }
   }
 
   // Faux-bold headings sometimes lose word spaces (title) or double a short
@@ -2165,6 +2206,27 @@ async function importPdf(arrayBuffer){
   while(lines.length && isBlank(lines[lines.length-1])) lines.pop();
   if(!lines.length) throw new Error('No chord/lyric content found in that PDF');
   return { meta, lines };
+}
+
+async function pdfOcrPageItems(page, worker){
+  const base = page.getViewport({ scale:1 });
+  // Roughly 216 dpi for ordinary sheets; cap large pages to bound memory.
+  const scale = Math.min(3, 2600 / Math.max(base.width, base.height));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  try {
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport, background:'#ffffff' }).promise;
+    const result = await worker.recognize(canvas);
+    const data = result && result.data ? result.data : {};
+    let items = ocrBoxItems(data.words, canvas.height);
+    if(!items.length) items = ocrBoxItems(data.lines, canvas.height);
+    // Use PDF points for both sources so spacing/column thresholds agree.
+    return items.map(it => ({ ...it, x:it.x/scale, y:it.y/scale, w:it.w/scale, h:it.h/scale }));
+  } finally {
+    canvas.width = canvas.height = 0;
+  }
 }
 
 /* ============================================================
@@ -2198,11 +2260,15 @@ function imageDims(file){
 
 function ocrBoxItems(entries, imageHeight){
   return (entries || []).map(w => {
-    const text = (w.text || w.symbols?.map(s => s.text).join('') || '').trim();
+    let text = (w.text || w.symbols?.map(s => s.text).join('') || '').trim();
     const b = w.bbox || {};
     const x0 = Number(b.x0), x1 = Number(b.x1), y0 = Number(b.y0), y1 = Number(b.y1);
     if(!text || !Number.isFinite(x0) || !Number.isFinite(x1) || !Number.isFinite(y0) || !Number.isFinite(y1)) return null;
     if(w.confidence !== undefined && w.confidence < 20) return null;
+    // OCR sometimes doubles a single root (e.g. "Cc") inside a box only
+    // one glyph wide. Keep genuine flats such as Bb and ordinary words.
+    const doubled = text.match(/^([ACDEFG])\1$/i);
+    if(doubled && x1-x0 <= y1-y0) text = doubled[1].toUpperCase();
     return {
       str: text,
       x: x0,
@@ -2239,13 +2305,13 @@ function importPositionedItems(items, pageW, meta){
 }
 
 let lastOcrToast = 0;
-function ocrLogger(m){
+function ocrLogger(m, label){
   if(!m || m.status !== 'recognizing text') return;
   const now = Date.now();
   if(now - lastOcrToast < 900 && m.progress < 1) return;
   lastOcrToast = now;
   const pct = Math.max(1, Math.round((m.progress || 0) * 100));
-  toast('Reading image ' + pct + '%');
+  toast((label || 'Reading image') + ' ' + pct + '%');
 }
 
 async function importImage(file){
